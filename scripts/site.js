@@ -98,7 +98,12 @@
     const f = String(rel || "");
     if (!f) return "";
     if (/^https?:\/\//i.test(f)) return f;
-    return Site.base ? Site.base + "/" + f.replace(/^\/+/, "") : "";
+    if (!Site.base) return "";
+    // 相册门禁：每张图/每段视频都要带票，Caddy 拿 ?k= 去 album-push 核验。
+    // 票来自 scripts/gate.js（用户输过验证码才有），没票就照旧请求——让它 401，
+    // 而不是悄悄退回不带票的地址，否则「为什么图裂了」会变成很难查的问题。
+    const k = window.__ALBUM_K || "";
+    return Site.base + "/" + f.replace(/^\/+/, "") + (k ? "?k=" + encodeURIComponent(k) : "");
   };
 
   // NAS 没开机 / 隧道断了 / 单张图 404 时统一落到这张手账风占位图
@@ -707,7 +712,8 @@
           btn.hidden = true;
           const base = String(v.src || "").split("?")[0];
           if (!base) return;
-          vid.src = base + "?r=" + Date.now();
+          const k = window.__ALBUM_K || "";
+          vid.src = base + "?r=" + Date.now() + (k ? "&k=" + encodeURIComponent(k) : "");
           try { vid.load(); } catch (e) {}
         };
         if (msg) card.dataset.err = msg;
