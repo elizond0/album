@@ -443,15 +443,27 @@
 .toast[hidden] { display: none; }
 
 /* 版本时间戳（后台顶部）与改动日志（2026-11-23 新增） */
+/* 版本时间戳：放在后台正文末尾（2026-11-23 从顶栏挪下来）。
+   顶栏留给操作按钮，版本信息属于脚注，和前台页脚本是同一个位置。 */
+#panel-view:not([hidden]) {
+  /* 内容短时也把脚注压到页面底部，而不是紧贴在最后一张卡片下面飘着 */
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100vh - 200px);
+}
+.admin-foot {
+  margin-top: auto;
+  padding: var(--space-5) 0 var(--space-3);
+  border-top: 1px solid var(--color-border);
+  text-align: center;
+}
 .ver-stamp {
   font-size: var(--fs-tiny);
   color: var(--color-muted);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
   letter-spacing: .02em;
-  margin-right: 4px;
-  padding-right: 12px;
-  border-right: 1px solid var(--color-border);
+  user-select: all;      /* 想复制版本号时一下选全，别拖着选半个日期 */
 }
 .changelog { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-3); }
 .changelog__item {

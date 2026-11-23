@@ -531,6 +531,16 @@ main > .section.home-slide:first-of-type { border-top: 0; }
   transition: background var(--dur-fast) ease-out;
 }
 .lightbox__btn:hover { background: rgba(255, 255, 255, 0.22); }
+/* 到边了就把按钮停用：第一张没有「上一张」、最后一张没有「下一张」。
+   2026-11-23 之前是取模循环，点最后一张会绕回第一张，看着像又从头开始。 */
+.lightbox__btn[disabled] {
+  opacity: .22;
+  cursor: default;
+  pointer-events: none;
+}
+/* 只有一张照片：两侧都停用，也不需要那两个圈占位 */
+.lightbox.is-single .lightbox__prev,
+.lightbox.is-single .lightbox__next { display: none; }
 .lightbox__close { top: 20px; right: 20px; }
 .lightbox__prev { left: 20px; top: 50%; transform: translateY(-50%); }
 .lightbox__next { right: 20px; top: 50%; transform: translateY(-50%); }

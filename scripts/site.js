@@ -323,8 +323,15 @@
     const cap = Math.min(all.length, maxRows * perRow);
     let shown = Math.min(cap, firstRows * perRow);
 
+    // 灯箱的翻页范围 = 已经铺出来的这些，不是全部 562 张。
+    // 首页按设置只显示 2 行（8 张），点第 8 张往后翻出第 9 张、而墙上根本没有它，
+    // 用户会以为「照片墙漏图了」。取 seen 这个活数组：more 补进来的会自然接上。
+    const seen = [];
     const frag = document.createDocumentFragment();
-    for (let i = 0; i < shown; i++) frag.appendChild(Site.photoCard(all[i], i, all));
+    for (let i = 0; i < shown; i++) {
+      seen.push(all[i]);
+      frag.appendChild(Site.photoCard(all[i], seen.length - 1, seen));
+    }
     grid.appendChild(frag);
 
     if (!more) return;
@@ -342,7 +349,10 @@
       if (shown >= cap) return false;
       const end = Math.min(cap, shown + step);
       const f = document.createDocumentFragment();
-      for (let i = shown; i < end; i++) f.appendChild(Site.photoCard(all[i], i, all));
+      for (let i = shown; i < end; i++) {
+        seen.push(all[i]);
+        f.appendChild(Site.photoCard(all[i], seen.length - 1, seen));
+      }
       grid.appendChild(f);
       shown = end;
       sync();
@@ -470,7 +480,9 @@
       }, { passive: true });
     }
     Site.lightbox.items = items || [];
-    Site.lightbox.idx = index || 0;
+    // 下标夹到有效区间：外面传进来的 i 可能是筛选前的旧下标，夹一下免得开成空白
+    const n0 = Site.lightbox.items.length;
+    Site.lightbox.idx = Math.min(Math.max(0, index || 0), Math.max(0, n0 - 1));
     Site.lightbox.fill();
     lb.hidden = false;
     requestAnimationFrame(() => lb.classList.add("open"));
@@ -515,6 +527,25 @@
     lb.querySelector(".lightbox__caption").textContent =
       (p.title && p.title !== place ? p.title + " · " : "") + place +
       (p.date ? " · " + String(p.date).replace(/-/g, ".") : "");
+
+    Site.lightbox.syncNav();
+  };
+
+  /* 第一张不给「上一张」、最后一张不给「下一张」。
+     2026-11-23 之前是取模循环：点最后一张往后会直接跳回第一张，
+     看上去像「到底了却又从头开始」，用户认为不合理，改成到边即停。 */
+  Site.lightbox.syncNav = function () {
+    const lb = $("#lightbox");
+    if (!lb) return;
+    const n = (Site.lightbox.items || []).length;
+    const i = Site.lightbox.idx || 0;
+    const prev = lb.querySelector('.lightbox__btn[data-a="prev"]');
+    const next = lb.querySelector('.lightbox__btn[data-a="next"]');
+    const single = n <= 1;
+    if (prev) prev.disabled = single || i <= 0;
+    if (next) next.disabled = single || i >= n - 1;
+    // 只有一张时两侧都停用，别再留两个按不动的圆圈抢视线
+    lb.classList.toggle("is-single", single);
   };
 
   Site.lightbox.close = function () {
@@ -532,7 +563,10 @@
     const n = items.length;
     if (!n || !lb || Site.lightbox._busy) return;
     const dir = d > 0 ? 1 : -1;
-    Site.lightbox.idx = (Site.lightbox.idx + d + n) % n;
+    const next = Site.lightbox.idx + d;
+    // 到边界就停住，不绕回另一头
+    if (next < 0 || next >= n) { Site.lightbox.syncNav(); return; }
+    Site.lightbox.idx = next;
     const img = lb.querySelector(".lightbox__img");
     const cap = lb.querySelector(".lightbox__caption");
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;

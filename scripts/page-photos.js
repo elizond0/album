@@ -103,8 +103,11 @@
     wall.innerHTML = "";
 
     const frag = document.createDocumentFragment();
+    // 灯箱范围 = 本页。分页的意义就是「这一页就这些」，
+    // 翻到最后一张还能滑进下一页，页码栏就白摆了（2026-11-23 改）。
+    const pageList = list.slice(start, start + count);
     indexMap(start, count, cols).forEach((idx, vi) => {
-      frag.appendChild(Site.photoCard(list[idx], idx, list));
+      frag.appendChild(Site.photoCard(list[idx], idx - start, pageList));
     });
     wall.appendChild(frag);
 

@@ -208,8 +208,8 @@
     if (!el) return;
     const v = at || (db && db.builtAt) || (Site.db && Site.db.builtAt) || "";
     const t = window.Site && Site.stampText ? Site.stampText(v) : String(v);
-    el.textContent = t ? "版本 " + t : "版本 —";
-    el.title = t ? "当前线上内容版本（页面页脚同此时间）" : "还没有版本信息";
+    el.textContent = t ? "内容版本 " + t : "内容版本 —";
+    el.title = t ? "当前已发布的内容版本（前台页脚同此时间）" : "还没有版本信息";
   }
 
   /* ---------- 退出 ---------- */
@@ -982,11 +982,14 @@
       const r = await pushContent(json);
       dirty = false;
       $("#dirty-tip").hidden = true;
-      renderStamp(built.builtAt);     // 顶部版本立刻跟到最新，不用刷新
+      renderStamp(built.builtAt);     // 页脚版本立刻跟到最新，不用刷新
       logLoaded = false;              // 下次点开「改动日志」强制重拉
       const c = String((r && r.commit) || "").slice(0, 7);
       const via = r && r.via === "direct" ? "（直连）" : "";
-      toast(`${r && r.note ? r.note + "，" : ""}已提交${via}${c ? " " + c : ""}，Pages 约 20~60 秒构建`);
+      // 版本号挪到页面最底部了，发布后不一定看得见，所以在提示里带一份
+      const vt = window.Site && Site.stampText ? Site.stampText(built.builtAt) : "";
+      toast(`${r && r.note ? r.note + "，" : ""}已提交${via}${c ? " " + c : ""}` +
+            (vt ? `，内容版本 ${vt}` : "") + "，Pages 约 20~60 秒构建");
     } catch (e) {
       if (e.message === "CANCELLED") {
         toast("已取消，没有提交任何东西");

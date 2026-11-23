@@ -892,7 +892,17 @@ def main():
     _gates.update(_load_gates())          # 容器重启后，已经登录过的设备不用重输
     if len(sys.argv) >= 3 and sys.argv[1] == "--set-guest":
         _write_hash(GUEST_F, sys.argv[2])
+        # 换口令顺手吊销所有访客票。老口令本身已经进不来（哈希被覆盖），
+        # 但拿着旧票的浏览器还能再看 30 天——「换口令」在人的心里就是
+        # 「之前发出去的那张通行证作废」，不吊销等于没换干净。
+        killed = [t for t, g in _gates.items()
+                  if str((g or {}).get("kind") or "guest") != "totp"]
+        for t in killed:
+            _gates.pop(t, None)
+        if killed:
+            _save_gates()
         print(f"访客口令已写入 {GUEST_F}（pbkdf2，0600）。只能看图，改不了内容。")
+        print(f"已吊销旧访客票 {len(killed)} 张；重启服务后对内存里的旧票同样生效。")
         return 0
     if len(sys.argv) >= 2 and sys.argv[1] == "--no-guest":
         try:
