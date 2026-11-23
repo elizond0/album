@@ -201,6 +201,8 @@
   $("#logout-btn")?.addEventListener("click", (e) => {
     e.preventDefault();
     setAuthToken("");
+    // 门禁票也要清：否则刷新时 gate.js 会拿着旧票直接放行，看起来像没退出去
+    try { localStorage.removeItem("album_gate_v1"); } catch (err) {}
     location.reload();
   });
 
@@ -210,9 +212,15 @@
     sessionStorage.removeItem(KEY_STORE);
   } catch (e) { /* 隐私模式下忽略 */ }
 
-  // 启动：有令牌先进（令牌也可能已过期，发布时会再撞 401），没有就弹进门口令
+  // 启动：有令牌先进（令牌也可能已过期，发布时会再撞 401），没有就弹进门口令。
+  // 2026-11-23：若刚在相册门禁里用动态码验过身（gate.js 留下的票 kind=totp），
+  // 这张票服务端也认（_ok_admin 里认），直接进——同一次验证不该让人输两遍。
+  // 访客口令换来的票 kind=guest，不享受这条，仍然要口令。
   if (getAuthToken()) enter();
-  else gateIn();
+  else if (window.__ALBUM_K && window.__ALBUM_KIND === "totp") {
+    setAuthToken(window.__ALBUM_K);
+    enter();
+  } else gateIn();
 
   /* ---------- 标签页 ---------- */
   $("#tabs").addEventListener("click", (e) => {
