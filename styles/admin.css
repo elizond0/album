@@ -474,3 +474,7 @@
   font-size: var(--fs-small); color: var(--color-muted); line-height: 1.55;
 }
 .changelog__empty { color: var(--color-muted); font-size: var(--fs-small); list-style: none; }
+
+/* 改动日志的工具栏：说明文字占满、刷新按钮靠右，别飘在句子后面 */
+.log-bar { align-items: center; }
+.log-bar #log-stat { flex: 1 1 auto; margin: 0; }
