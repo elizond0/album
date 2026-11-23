@@ -28,6 +28,8 @@ push-secret 里同时兼容老格式（盐:sha256），下次 --set-key 自动�
 接口：
   GET  /api/health   存活 + 有没有设过口令
   POST /api/auth     {key} → {ok, token, ttl}   进后台的令牌（默认 12 小时）
+  POST /api/login    {code} → {ok, token, ttl}  相册门禁：动态码或访客口令换看图的票
+  GET  /api/gate?k=  → 204/401                  给 Caddy forward_auth 用的校验口
   POST /api/save     需 X-Admin-Auth 或 X-Admin-Key
   POST /api/pull|run 运维，需 X-Admin-Key
 环境变量：
@@ -78,9 +80,19 @@ PBKDF2_ITER = 200_000
 TOKEN_TTL = 12 * 3600   # 进后台的令牌有效期，够一个下午改文案
 TOKEN_MAX = 200         # 内存里最多留多少个令牌，超了先丢最老的
 
+# ── 相册门禁（看图的票）──────────────────────────────────────────
+# 和进后台的令牌分开存：后台票 12 小时、只有 200 个坑；看图的票要能挂 30 天，
+# 而且每张照片都会带一次，量级完全不同，混在一起会把后台票挤掉。
+GUEST_F = HOME / "guest-key"      # 访客口令哈希（给家人看，不带动态码）
+GATE_F = HOME / "gate-tokens.json"  # 看图的票，落盘，容器重启不掉线
+GATE_TTL_TOTP = 12 * 3600         # 动态码登录：12 小时
+GATE_TTL_GUEST = 30 * 86400       # 访客口令登录：30 天
+GATE_MAX = 500                    # 票的容量上限，超了先丢最老的
+
 _hits = {}              # ip -> [ts, ...]
 _g_hits = deque()       # 全局时间戳队列
 _tokens = {}            # token -> 过期时间戳
+_gates = {}             # 看图的票 -> 过期时间戳（启动时从 GATE_F 读回）
 _auth_fail = deque()    # 全局鉴权失败时间戳，用于「口令被爆破」刹车
 AUTH_FAIL_MAX = 12      # 一分钟内全局失败 12 次就短暂停止受理校验
 
@@ -135,6 +147,87 @@ def check_key(key: str) -> bool:
         return False
     got = hashlib.sha256((salt + key).encode("utf-8")).hexdigest()
     return hmac.compare_digest(got, want)
+
+
+def _write_hash(path: Path, key: str, iter_: int = PBKDF2_ITER):
+    """把口令写成 pbkdf2$轮数$盐$dk，0600。访客口令与后台口令同一套格式。"""
+    salt = os.urandom(16)
+    dk = hashlib.pbkdf2_hmac("sha256", key.encode("utf-8"), salt, iter_, dklen=32)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"pbkdf2${iter_}${salt.hex()}${dk.hex()}\n", encoding="utf-8")
+    os.chmod(path, 0o600)
+    return path
+
+
+def _check_hash(path: Path, key: str) -> bool:
+    try:
+        raw = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return False
+    if not raw or not key:
+        return False
+    try:
+        _, iter_s, salt_hex, dk_hex = raw.split("$", 3)
+        dk = hashlib.pbkdf2_hmac(
+            "sha256", key.encode("utf-8"), bytes.fromhex(salt_hex), int(iter_s), dklen=32
+        )
+        return hmac.compare_digest(dk.hex(), dk_hex)
+    except (ValueError, TypeError):
+        return False
+
+
+def check_guest(key: str) -> bool:
+    """访客口令：只给看，不给改。没设就返回 False（门禁只认动态码）。"""
+    return _check_hash(GUEST_F, key)
+
+
+def guest_enabled() -> bool:
+    return GUEST_F.exists()
+
+
+# ---------- 看图令牌（Caddy forward_auth 用）----------
+
+def _load_gates() -> dict:
+    try:
+        d = json.loads(GATE_F.read_text(encoding="utf-8"))
+        now = time.time()
+        return {k: float(v) for k, v in d.items() if float(v) > now}
+    except Exception:
+        return {}
+
+
+def _save_gates():
+    try:
+        HOME.mkdir(parents=True, exist_ok=True)
+        GATE_F.write_text(json.dumps(_gates), encoding="utf-8")
+        os.chmod(GATE_F, 0o600)
+    except OSError:
+        pass
+
+
+def issue_gate(ttl: float) -> str:
+    now = time.time()
+    for t in [t for t, e in _gates.items() if e < now]:
+        _gates.pop(t, None)
+    while len(_gates) >= GATE_MAX:
+        _gates.pop(next(iter(_gates)), None)
+    tok = secrets.token_urlsafe(32)
+    _gates[tok] = now + ttl
+    _save_gates()
+    return tok
+
+
+def check_gate(tok: str) -> bool:
+    if not tok:
+        return False
+    exp = _gates.get(tok)
+    if not exp:
+        return False
+    if exp < time.time():
+        _gates.pop(tok, None)
+        _save_gates()
+        return False
+    return True
 
 
 # ---------- 动态码 TOTP（RFC 6238）----------
@@ -397,6 +490,43 @@ class Handler(BaseHTTPRequestHandler):
     # 为什么单独一个接口：进后台和「提交」是两件事。进门校验一次，之后页面拿着
     # 令牌改文案；点「保存并发布」时再问一次口令——两道门都落在 NAS 上，
     # 因为 6 位数字的任何哈希放在前端 JS 里都是公开的，等于没设。
+    # ── 相册门禁：换一张「看图的票」──────────────────────────────
+    # 为什么单独一个口：进后台那套（口令 + 动态码）是给自己用的，家人不该拿到
+    # 仓库写权限。这里只发看图的票，票进不了 /api/save，泄了也改不了任何东西。
+    def _login(self):
+        if auth_braked():
+            log(f"门禁失败过多，暂停受理 ip={self.client_ip()}")
+            return self._json(429, {"ok": False, "error": "试错太多次了，等一分钟再来"})
+        if self.limited():
+            return self._json(429, {"ok": False, "error": "太频繁了，等一下再试"})
+
+        n = int(self.headers.get("Content-Length") or 0)
+        if n <= 0 or n > 4096:
+            return self._json(413, {"ok": False, "error": "体积异常"})
+        try:
+            body = json.loads(self.rfile.read(n).decode("utf-8"))
+        except Exception:
+            return self._json(400, {"ok": False, "error": "body 不是 JSON"})
+
+        code = str((body or {}).get("code") or "").strip()
+        if not code:
+            return self._json(400, {"ok": False, "error": "没填验证码"})
+
+        ok_totp = totp_enabled() and (check_totp(code) or check_recovery(code))
+        ok_guest = (not ok_totp) and check_guest(code)
+
+        if not (ok_totp or ok_guest):
+            hit = note_fail()
+            log(f"门禁拒绝 ip={self.client_ip()} 窗口内失败={hit}")
+            time.sleep(0.4)
+            return self._json(401, {"ok": False, "error": "验证码或口令不对"})
+
+        ttl = GATE_TTL_TOTP if ok_totp else GATE_TTL_GUEST
+        kind = "totp" if ok_totp else "guest"
+        tok = issue_gate(ttl)
+        log(f"门禁通过 ip={self.client_ip()} kind={kind} ttl={int(ttl)}s")
+        return self._json(200, {"ok": True, "token": tok, "ttl": int(ttl), "kind": kind})
+
     def _auth(self):
         if auth_braked():
             log(f"口令失败过多，暂停受理 ip={self.client_ip()}")
@@ -448,13 +578,33 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         # 对外只回一个存活信号。端口号、有没有设口令、存储格式这些都属于
         # 内部信息，公开出去只会帮攻击者缩小范围。要看详情在本机跑 --check。
-        if self.path.split("?")[0] == "/api/health":
+        p = self.path.split("?")[0]
+
+        # Caddy 的 forward_auth 对每个照片/视频请求都来问一次，这里绝不能限速，
+        # 否则一屏 30 张图就把自己锁死。只做一次字典查表 + 常数时间比对。
+        if p == "/api/gate":
+            q = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+            ok = check_gate((q.get("k") or [""])[0])
+            if ok and self.command == "HEAD":
+                self.send_response(204)
+                self.send_header("Content-Length", "0")
+                self._cors()
+                self.end_headers()
+                return
+            self._json(204 if ok else 401, {"ok": True} if ok else {"ok": False})
+            return
+
+        if p == "/api/health":
             self._json(200, {"ok": True})
         else:
             self._json(404, {"ok": False, "error": "not found"})
 
+    do_HEAD = do_GET
+
     def do_POST(self):
         p = self.path.split("?")[0]
+        if p == "/api/login":
+            return self._login()
         if p == "/api/auth":
             return self._auth()
         if p == "/api/pull":
@@ -542,6 +692,18 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    _gates.update(_load_gates())          # 容器重启后，已经登录过的设备不用重输
+    if len(sys.argv) >= 3 and sys.argv[1] == "--set-guest":
+        _write_hash(GUEST_F, sys.argv[2])
+        print(f"访客口令已写入 {GUEST_F}（pbkdf2，0600）。只能看图，改不了内容。")
+        return 0
+    if len(sys.argv) >= 2 and sys.argv[1] == "--no-guest":
+        try:
+            GUEST_F.unlink()
+        except OSError:
+            pass
+        print("访客口令已关闭，门禁只认动态码")
+        return 0
     if len(sys.argv) >= 3 and sys.argv[1] == "--set-key":
         make_secret(sys.argv[2])
         print(f"口令已写入 {SECRET_F}（pbkdf2，0600）")
@@ -551,6 +713,7 @@ def main():
         fmt = "pbkdf2" if raw.startswith("pbkdf2$") else ("旧 sha256 格式（建议 --set-key 升级）" if raw else "未设置")
         print("secret:", fmt, "| token:", "有" if TOKEN_F.exists() else "缺")
         print("totp:  ", "开" if totp_enabled() else "关", "| 恢复码:", _recovery_left(), "个")
+        print("门禁:  ", "访客口令有" if guest_enabled() else "访客口令无", "| 有效票:", len(_gates), "张")
         return 0
     if len(sys.argv) >= 2 and sys.argv[1] == "--set-totp":
         secret, codes, uri = make_totp()
