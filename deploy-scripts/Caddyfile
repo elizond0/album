@@ -12,6 +12,10 @@
 #      写入口因此永远不会直接暴露给公网，只有 Caddy 能进。
 #      ⚠ 改这个文件后必须 `caddy validate --config <file>` 再 reload：
 #      语法错会让整站（含全部照片）一起挂掉，不只是后台。
+#   5. 2026-11-23 起加了相册门禁：/img/* 与 /video/* 必须先通过 forward_auth。
+#      ⚠ 为什么整个站点块包在 route 里：Caddy 的指令顺序里 handle 排在
+#      forward_auth 之前，顶层写 forward_auth 会被 handle 抢先返回、门禁形同虚设。
+#      route 内严格按书写顺序执行，所以「先门禁、再分发」必须这样写。
 
 :8443 {
 	encode zstd gzip
@@ -27,24 +31,35 @@
 		Access-Control-Max-Age "600"
 	}
 
-	# 后台写入口：口令校验 / 内容校验 / 旧版存档 / 提交 GitHub 全在 album-push.py 里
-	handle /api/* {
-		reverse_proxy 127.0.0.1:8787
-	}
+	route {
+		# ── 相册门禁 ──────────────────────────────────────────────────
+		# 浏览器取图时带 ?k=<票>（前端 Site.media() 自动拼），Caddy 拿这个 k
+		# 去问 album-push 的 /api/gate：204 放行，401 直接挡在这里，
+		# 图片根本不会被 /srv/pub 读出来。隧道域名 + 文件名全被猜到也没用。
+		@guarded path /img/* /video/*
+		forward_auth @guarded 127.0.0.1:8787 {
+			uri /api/gate?k={query.k}
+		}
 
-	# index.json 必须单独一条：no-store 写在同一个 handle 里会被上面的
-	# "public, max-age=604800" 盖掉（Caddy 的 header 指令不按书写顺序执行，
-	# 实测改完 index.json 变成了 max-age=604800 —— 隧道换域名后会拿到旧清单）。
-	handle /index.json {
-		root * /srv/pub
-		header Cache-Control "no-store"
-		file_server
-	}
+		# 后台写入口：口令校验 / 内容校验 / 旧版存档 / 提交 GitHub 全在 album-push.py 里
+		handle /api/* {
+			reverse_proxy 127.0.0.1:8787
+		}
 
-	# 其余全部是静态媒体
-	handle {
-		root * /srv/pub
-		file_server
-		header Cache-Control "public, max-age=604800"
+		# index.json 必须单独一条：no-store 写在同一个 handle 里会被上面的
+		# "public, max-age=604800" 盖掉（Caddy 的 header 指令不按书写顺序执行，
+		# 实测改完 index.json 变成了 max-age=604800 —— 隧道换域名后会拿到旧清单）。
+		handle /index.json {
+			root * /srv/pub
+			header Cache-Control "no-store"
+			file_server
+		}
+
+		# 其余全部是静态媒体
+		handle {
+			root * /srv/pub
+			header Cache-Control "public, max-age=604800"
+			file_server
+		}
 	}
 }
