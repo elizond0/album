@@ -78,7 +78,7 @@
         <div class="admin-bar__right">
           <!-- 版本时间戳：取 content.json 的 builtAt，和页面页脚用同一个格式函数，
                所以两边永远一致。后台里额外标一个「版本」前缀，页脚只放时间。 -->
-          <span class="ver-stamp" id="admin-stamp" title="当前线上内容版本（与页面页脚一致）">版本 —</span>
+          <span class="ver-stamp" id="admin-stamp" title="当前已发布的内容版本（与页面页脚同源；页脚受缓存影响，最多滞后 10 分钟）">版本 —</span>
           <span class="dirty-tip" id="dirty-tip" hidden>有未发布的改动</span>
           <button class="btn" id="save-all" type="button">保存并发布</button>
           <button class="btn btn--ghost" id="save-download" type="button">仅下载</button>
