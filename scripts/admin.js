@@ -13,9 +13,11 @@
     String(s ?? "").replace(/[&<>"']/g, (c) =>
       ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])
     );
-  const localToday = () => {
+  // 版本时间戳：写到 content.json 的 builtAt，页面页脚和后台顶部都读它。
+  // 带时分，才看得出「今天是不是又发过一版」；纯日期同一天两次发布看起来一模一样。
+  const localStamp = () => {
     const d = new Date(), p = (n) => String(n).padStart(2, "0");
-    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
   };
 
   let db = null;
@@ -195,6 +197,19 @@
     renderBasic(); renderTexts();
     ["timeline", "quotes", "wishes", "events"].forEach(renderList);
     renderPhotos();
+    renderStamp();
+  }
+
+  /* ---------- 版本时间戳 ----------
+     值来自 content.json 的 builtAt，格式化函数用 Site.stampText（site.js 里那份），
+     页脚 [data-stamp] 用的是同一个函数——所以后台和页面不可能显示成两个时间。 */
+  function renderStamp(at) {
+    const el = $("#admin-stamp");
+    if (!el) return;
+    const v = at || (db && db.builtAt) || (Site.db && Site.db.builtAt) || "";
+    const t = window.Site && Site.stampText ? Site.stampText(v) : String(v);
+    el.textContent = t ? "版本 " + t : "版本 —";
+    el.title = t ? "当前线上内容版本（页面页脚同此时间）" : "还没有版本信息";
   }
 
   /* ---------- 退出 ---------- */
@@ -230,6 +245,7 @@
     document.querySelectorAll(".panel").forEach((p) => {
       p.hidden = p.id !== "panel-" + b.dataset.tab;
     });
+    if (b.dataset.tab === "log" && !logLoaded) loadLog();
   });
 
   function markDirty() { dirty = true; $("#dirty-tip").hidden = false; }
@@ -249,8 +265,9 @@
   function renderHomeCfg() {
     const h = (db.meta && db.meta.home) || {};
     $("#f-h-tl").value = h.timelineCount || 5;
+    // 2026-11-23：合并成一个字段。以前拆成「首屏行数 / 滚到底最多行数」，
+    // 后台填 2、页面上却滚出 6 行，看着就是「设置没生效」。现在一个数说了算。
     $("#f-h-pr").value = h.photoRows || 2;
-    if ($("#f-h-pmax")) $("#f-h-pmax").value = h.photoRowsMax || Math.max(4, (h.photoRows || 2) + 4);
     $("#f-h-qr").value = h.quoteRows || 1;
     $("#f-h-wc").value = h.wishCount || 8;
     $("#f-h-videos").value = h.showVideos || "auto";
@@ -326,11 +343,10 @@
     db.meta.couple = { a: $("#f-couple-a").value.trim(), b: $("#f-couple-b").value.trim() };
     db.meta.hero = $("#f-hero").value.trim();
     const firstRows = Math.max(1, +$("#f-h-pr").value || 3);
-    const maxEl = $("#f-h-pmax");
     db.meta.home = {
       timelineCount: Math.max(1, +$("#f-h-tl").value || 5),
       photoRows: firstRows,
-      photoRowsMax: Math.max(firstRows, (maxEl && +maxEl.value) || firstRows + 3),
+      photoRowsMax: firstRows,
       quoteRows: Math.max(1, +$("#f-h-qr").value || 1),
       wishCount: Math.max(2, +$("#f-h-wc").value || 8),
       showVideos: $("#f-h-videos").value,
@@ -595,7 +611,7 @@
       db.meta.home = {
         timelineCount: num("#f-h-tl", 5, 1, 20),
         photoRows: first,
-        photoRowsMax: Math.max(first, num("#f-h-pmax", first + 3, 1, 12)),
+        photoRowsMax: first,
         quoteRows: num("#f-h-qr", 1, 1, 6),
         wishCount: num("#f-h-wc", 8, 2, 30),
         showVideos: $("#f-h-videos") ? $("#f-h-videos").value : "auto",
@@ -641,7 +657,7 @@
     (out.videos || []).forEach((v) => { if (v.file) v.src = v.file; });
     out.base = "";
     out.version = 1;
-    out.builtAt = localToday();
+    out.builtAt = localStamp();   // 版本时间戳：页脚与后台都读它
     return out;
   }
 
@@ -887,10 +903,75 @@
     toast("已清除本次会话的 token");
   });
 
+  /* ---------- 改动日志 ----------
+     为什么不靠 GitHub 的 commit diff：content.json 一整份 350 KB，任何一次保存
+     都会整文件重写，diff 里看不出「你改的是照片墙行数还是别的地方」。
+     所以由 NAS 在提交成功那一刻，把新旧两版结构化对比一遍，写成人话，落到
+     changes.jsonl。后台只负责读。 */
+  let logLoaded = false;
+
+  async function loadLog() {
+    const box = $("#log-list");
+    const stat = $("#log-stat");
+    if (!box) return;
+    box.innerHTML = '<li class="changelog__empty">加载中…</li>';
+    const base = await nasBase();
+    if (!base) {
+      if (stat) stat.textContent = "连不上 NAS，看不到日志";
+      box.innerHTML = "";
+      return;
+    }
+    const headers = {};
+    const tok = getAuthToken();
+    if (tok) headers["X-Admin-Auth"] = tok;
+    let r;
+    try {
+      r = await ghFetch(`${base}/api/log?limit=30`, { headers, cache: "no-store" }, 15000);
+    } catch (e) {
+      if (stat) stat.textContent = "读取失败：NAS 没有响应";
+      box.innerHTML = "";
+      return;
+    }
+    if (r.status === 401) {
+      if (stat) stat.textContent = "登录状态已过期，刷新页面重新进后台";
+      box.innerHTML = "";
+      return;
+    }
+    if (!r.ok) {
+      if (stat) stat.textContent = "读取失败：HTTP " + r.status;
+      box.innerHTML = "";
+      return;
+    }
+    const j = await r.json().catch(() => ({}));
+    const items = (j && j.items) || [];
+    logLoaded = true;
+    if (stat) stat.textContent = items.length
+      ? `最近 ${items.length} 次发布 · 日志留在 NAS 上，最多 200 条`
+      : "还没有发布记录";
+    if (!items.length) {
+      box.innerHTML = '<li class="changelog__empty">还没有记录。改点东西、点一次「保存并发布」就会留一条。</li>';
+      return;
+    }
+    box.innerHTML = items
+      .map((it) => {
+        const lines = (it.changes || []).map((c) => `<li>${esc(c)}</li>`).join("");
+        const n = it.photos != null ? `<span>${esc(String(it.photos))} 张照片</span>` : "";
+        const c = it.commit ? `<code>${esc(String(it.commit).slice(0, 7))}</code>` : "";
+        return `<li class="changelog__item">
+          <p class="changelog__head"><b>${esc(it.t || "")}</b>${c}${n}</p>
+          <ul class="changelog__diffs">${lines || "<li>（没有明细）</li>"}</ul>
+        </li>`;
+      })
+      .join("");
+  }
+
+  $("#log-refresh")?.addEventListener("click", () => { logLoaded = false; loadLog(); });
+
   /* ---------- 保存并发布 ---------- */
   $("#save-all").addEventListener("click", async () => {
     const btn = $("#save-all");
-    const json = JSON.stringify(buildContent(), null, 1);
+    const built = buildContent();
+    const json = JSON.stringify(built, null, 1);
 
     btn.disabled = true;
     const old = btn.textContent;
@@ -901,6 +982,8 @@
       const r = await pushContent(json);
       dirty = false;
       $("#dirty-tip").hidden = true;
+      renderStamp(built.builtAt);     // 顶部版本立刻跟到最新，不用刷新
+      logLoaded = false;              // 下次点开「改动日志」强制重拉
       const c = String((r && r.commit) || "").slice(0, 7);
       const via = r && r.via === "direct" ? "（直连）" : "";
       toast(`${r && r.note ? r.note + "，" : ""}已提交${via}${c ? " " + c : ""}，Pages 约 20~60 秒构建`);

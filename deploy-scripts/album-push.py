@@ -67,6 +67,8 @@ SECRET_F = HOME / "push-secret"
 TOKEN_F = HOME / ".gh_token"
 HIST_DIR = HOME / "history"
 LOG_F = HOME / "album-push.log"
+CHANGE_F = HOME / "changes.jsonl"   # 改动日志：每次提交成功写一条（人话摘要）
+CHANGE_MAX = 200                    # 只留最近 200 条
 
 MAX_BODY = 2 * 1024 * 1024
 TOP_KEYS = {"version", "builtAt", "base", "meta", "events", "timeline", "quotes", "wishes", "photos", "videos"}
@@ -97,8 +99,14 @@ _auth_fail = deque()    # 全局鉴权失败时间戳，用于「口令被爆破
 AUTH_FAIL_MAX = 12      # 一分钟内全局失败 12 次就短暂停止受理校验
 
 
+def now_cn(fmt="%Y-%m-%d %H:%M:%S"):
+    """容器时区是 UTC，而用户和 GitHub 页面看到的都是北京时间。
+    统一按 UTC+8 生成给人看的时间，别让日志和版本时间戳差 8 小时。"""
+    return time.strftime(fmt, time.gmtime(time.time() + 8 * 3600))
+
+
 def log(msg):
-    line = f"{time.strftime('%Y-%m-%d %H:%M:%S')} {msg}"
+    line = f"{now_cn()} {msg}"
     print(line, flush=True)
     try:
         with open(LOG_F, "a", encoding="utf-8") as f:
@@ -365,6 +373,141 @@ def archive(old_bytes: bytes):
         return ""
 
 
+# ── 改动日志 ────────────────────────────────────────────────────────
+# 为什么不让前端自己记：前端只知道「我改了什么」，不知道「到底有没有提交成功」。
+# 而且换设备、清缓存就断了。放在 NAS 上，以「提交成功」为准，是唯一可信的口径。
+# 为什么不用 GitHub commit diff：content.json 一整份 350 KB，保存一次整文件重写，
+# diff 里全是噪音。这里在服务端把新旧两版结构化对比一遍，只写人话。
+_HOME_FIELDS = [
+    ("photoRows", "首页照片墙行数"),
+    ("photoRowsMax", "首页照片墙最多行数"),
+    ("timelineCount", "时间轴条数"),
+    ("quoteRows", "随手记行数"),
+    ("wishCount", "心愿条数"),
+    ("showVideos", "影像板块"),
+]
+_PAGE_FIELDS = [
+    ("photosCols", "照片墙列数"),
+    ("photosRows", "照片墙每页行数"),
+    ("quotesCols", "随手记列数"),
+    ("wishLimit", "心愿单条数"),
+]
+_PHOTO_FIELDS = [("title", "描述"), ("desc", "补充"), ("date", "日期"),
+                 ("place", "地点"), ("hidden", "隐藏"), ("featured", "精选")]
+
+
+def _same(a, b):
+    if isinstance(a, (dict, list)) or isinstance(b, (dict, list)):
+        return json.dumps(a, ensure_ascii=False, sort_keys=True) == json.dumps(b, ensure_ascii=False, sort_keys=True)
+    return a == b
+
+
+def summarize(old, new):
+    """把新旧两版 content.json 的差异讲成人话，返回字符串列表。"""
+    out = []
+    om, nm = old.get("meta") or {}, new.get("meta") or {}
+
+    for k, label in (("anniversary", "纪念日"), ("hero", "首屏照片")):
+        if not _same(om.get(k), nm.get(k)):
+            out.append(f"{label}：{om.get(k) or '—'} → {nm.get(k) or '—'}")
+    oc, nc = om.get("couple") or {}, nm.get("couple") or {}
+    if not _same(oc, nc):
+        out.append(f"昵称：{oc.get('a', '')}/{oc.get('b', '')} → {nc.get('a', '')}/{nc.get('b', '')}")
+
+    oh, nh = om.get("home") or {}, nm.get("home") or {}
+    for k, label in _HOME_FIELDS:
+        if not _same(oh.get(k), nh.get(k)):
+            out.append(f"{label}：{oh.get(k, '—')} → {nh.get(k, '—')}")
+    if not _same(oh.get("order"), nh.get("order")):
+        out.append("首页板块顺序有调整")
+
+    op, npp = om.get("pages") or {}, nm.get("pages") or {}
+    for k, label in _PAGE_FIELDS:
+        if not _same(op.get(k), npp.get(k)):
+            out.append(f"{label}：{op.get(k, '—')} → {npp.get(k, '—')}")
+
+    ot, nt = om.get("texts") or {}, nm.get("texts") or {}
+    changed = [k for k in set(ot) | set(nt) if not _same(ot.get(k), nt.get(k))]
+    if changed:
+        head = "、".join(sorted(changed)[:3]) + ("…" if len(changed) > 3 else "")
+        out.append(f"文案：改了 {len(changed)} 处（{head}）")
+
+    def pmap(doc):
+        m = {}
+        for p in doc.get("photos") or []:
+            m[str(p.get("file") or p.get("src") or "")] = p
+        return m
+
+    opm, npm = pmap(old), pmap(new)
+    added = [f for f in npm if f not in opm]
+    removed = [f for f in opm if f not in npm]
+    mod = 0
+    fields = set()
+    for f in npm:
+        if f not in opm:
+            continue
+        for k, label in _PHOTO_FIELDS:
+            if not _same(opm[f].get(k), npm[f].get(k)):
+                mod += 1
+                fields.add(label)
+                break
+    bits = []
+    if added:
+        bits.append(f"新增 {len(added)} 张")
+    if removed:
+        bits.append(f"删除 {len(removed)} 张")
+    if mod:
+        bits.append(f"修改 {mod} 张（{'/'.join(sorted(fields))}）")
+    if bits:
+        out.append("照片：" + "、".join(bits))
+
+    for key, label in (("events", "事件"), ("timeline", "时间轴"), ("quotes", "随手记"), ("wishes", "愿望"), ("videos", "影像")):
+        oa, na = old.get(key) or [], new.get(key) or []
+        if _same(oa, na):
+            continue
+        if len(oa) != len(na):
+            out.append(f"{label}：{len(oa)} → {len(na)} 条")
+        elif not _same(oa, na):
+            n = sum(1 for a, b in zip(oa, na) if not _same(a, b))
+            out.append(f"{label}：改了 {n} 条")
+
+    if not out:
+        out.append("内容没有实质变化（只刷新了版本时间）")
+    if len(out) > 12:
+        out = out[:12] + [f"…另有 {len(out) - 12} 项"]
+    return out
+
+
+def append_change(entry):
+    try:
+        with open(CHANGE_F, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        lines = CHANGE_F.read_text(encoding="utf-8").splitlines()
+        if len(lines) > CHANGE_MAX:
+            CHANGE_F.write_text("\n".join(lines[-CHANGE_MAX:]) + "\n", encoding="utf-8")
+    except OSError as e:
+        log(f"写改动日志失败（不阻断）: {e}")
+
+
+def read_changes(limit=30):
+    try:
+        lines = CHANGE_F.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    out = []
+    for ln in reversed(lines):
+        ln = ln.strip()
+        if not ln:
+            continue
+        try:
+            out.append(json.loads(ln))
+        except Exception:
+            continue
+        if len(out) >= limit:
+            break
+    return out
+
+
 def check_photos(doc):
     """照片数不能骤降 + 文件名必须真的在 /srv/pub/img 下。返回错误信息或 None。"""
     photos = doc.get("photos")
@@ -617,6 +760,19 @@ class Handler(BaseHTTPRequestHandler):
             self._json(204 if ok else 401, {"ok": True} if ok else {"ok": False})
             return
 
+        if p == "/api/log":
+            # 改动日志里有「删了哪些照片、改了哪些设置」，只给后台登录的人看。
+            # 和 /api/save 用同一套身份判断（令牌或口令+动态码）。
+            if not self._ok_admin():
+                return self._json(401, {"ok": False, "error": "需要后台登录"})
+            q = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+            try:
+                lim = int((q.get("limit") or ["30"])[0])
+            except ValueError:
+                lim = 30
+            lim = max(1, min(200, lim))
+            return self._json(200, {"ok": True, "items": read_changes(lim)})
+
         if p == "/api/health":
             self._json(200, {"ok": True})
         else:
@@ -673,15 +829,18 @@ class Handler(BaseHTTPRequestHandler):
             log(f"读远端 sha 失败: {e}")
             return self._json(502, {"ok": False, "error": "读不到 GitHub 上的当前版本"})
 
-        # 存档旧版（尽力而为，失败不阻断）
+        # 存档旧版（尽力而为，失败不阻断）；顺手留下旧 doc，提交成功后用来算改动摘要
         saved = ""
+        old_doc = None
         try:
             s, j = gh(f"/contents/{FILE_PATH}?ref={BRANCH}")
-            saved = archive(base64.b64decode(j["content"]))
+            raw_old = base64.b64decode(j["content"])
+            saved = archive(raw_old)
+            old_doc = json.loads(raw_old.decode("utf-8"))
         except Exception as e:
             log(f"取旧版失败: {type(e).__name__}")
 
-        msg = time.strftime("admin: 更新 content.json（%Y-%m-%d %H:%M）")
+        msg = now_cn("admin: 更新 content.json（%Y-%m-%d %H:%M）")
         body = {
             "message": msg,
             "content": base64.b64encode(raw).decode(),
@@ -708,7 +867,21 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(502, {"ok": False, "error": "连不上 GitHub"})
 
         log(f"提交成功 commit={commit[:7]} photos={len(doc.get('photos') or [])} archive={saved}")
-        return self._json(200, {"ok": True, "commit": commit, "archive": saved})
+        # 改动日志以「提交成功」为准。old_doc 取不到（比如首次部署）时只记数量变化。
+        diffs = summarize(old_doc, doc) if isinstance(old_doc, dict) else ["首次提交（没有可比对的旧版本）"]
+        entry = {
+            "t": now_cn(),
+            "commit": commit,
+            "photos": len(doc.get("photos") or []),
+            "videos": len(doc.get("videos") or []),
+            "builtAt": doc.get("builtAt", ""),
+            "by": "token" if self.headers.get("X-Admin-Auth") else "key",
+            "ip": self.client_ip(),
+            "size": len(raw),
+            "changes": diffs,
+        }
+        append_change(entry)
+        return self._json(200, {"ok": True, "commit": commit, "archive": saved, "changes": diffs})
 
     def log_message(self, fmt, *args):        # 别把默认访问日志刷进 journal
         pass

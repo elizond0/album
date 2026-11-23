@@ -789,8 +789,10 @@
     const rows = Math.max(1, +h.photoRows || 2);
     return {
       timelineCount: Math.max(1, +h.timelineCount || 5),
-      photoRows: rows,                                              // 首屏先铺几排
-      photoRowsMax: Math.max(rows, +h.photoRowsMax || rows + 3),     // 滚到底最多铺到几排
+      photoRows: rows,                                              // 首屏铺几排
+      // 2026-11-23：默认与 photoRows 相等。以前默认 rows+3，后台只填一个数时
+      // 页面会自己多长三排，看起来像「设置没生效」。要更多行就改同一个数。
+      photoRowsMax: Math.max(rows, +h.photoRowsMax || rows),         // 滚到底最多铺到几排
       quoteRows: Math.max(1, +h.quoteRows || 1),
       wishCount: Math.max(2, +h.wishCount || 8),
       showVideos: h.showVideos || "auto", // auto | show | hide
@@ -860,12 +862,33 @@
     set("since-year", ann.slice(0, 4));
   };
 
+  /* ---------- 版本时间戳 ----------
+     页脚那个小字「2026.11.23 16:31」的来源。以前是 HTML 里写死的，改一次内容
+     也不会动，久了就成了假信息。现在统一读 content.json 的 builtAt，后台顶部
+     用的是同一个函数，两边永远一致。
+     兼容三种旧值：纯日期 2026-11-23 / 日期+时分 2026-11-23 16:31 / ISO 带 T。 */
+  Site.stampText = function (v) {
+    const s = String(v || "").trim();
+    if (!s) return "";
+    const m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T ](\d{1,2}):(\d{2}))?/);
+    if (!m) return s;
+    const p = (n) => String(n).padStart(2, "0");
+    return `${m[1]}.${p(m[2])}.${p(m[3])}` + (m[4] ? ` ${p(m[4])}:${m[5]}` : "");
+  };
+
+  Site.renderStamp = function () {
+    const t = Site.stampText(Site.db && Site.db.builtAt);
+    if (!t) return;
+    document.querySelectorAll("[data-stamp]").forEach((el) => { el.textContent = t; });
+  };
+
   /* ---------- 结语：内容就绪事件 ---------- */
   Site.boot = async function () {
     Site.watchFonts();          // 和内容加载并行，不等
     await Site.load();
     Site.applyTexts();
     Site.renderDays();
+    Site.renderStamp();
     Site.revealAll();
     if (!Site.db) Site.showLoadError();
     document.dispatchEvent(new CustomEvent("site:ready", { detail: Site.db }));

@@ -439,3 +439,34 @@
   margin: 0; max-width: 88vw; text-align: center;
 }
 .toast[hidden] { display: none; }
+
+/* 版本时间戳（后台顶部）与改动日志（2026-11-23 新增） */
+.ver-stamp {
+  font-size: var(--fs-tiny);
+  color: var(--color-muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .02em;
+  padding-right: 4px;
+}
+.changelog { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-3); }
+.changelog__item {
+  border-left: 2px solid var(--color-border);
+  padding: 2px 0 2px var(--space-3);
+}
+.changelog__head {
+  margin: 0 0 4px; display: flex; flex-wrap: wrap; align-items: baseline;
+  gap: var(--space-2); font-size: var(--fs-small); color: var(--color-text);
+}
+.changelog__head b { font-variant-numeric: tabular-nums; font-weight: 600; }
+.changelog__head code {
+  font-size: var(--fs-tiny); color: var(--color-muted);
+  background: var(--color-bg); border: 1px solid var(--color-border);
+  border-radius: 4px; padding: 1px 6px;
+}
+.changelog__head span { font-size: var(--fs-tiny); color: var(--color-muted); }
+.changelog__diffs {
+  margin: 0; padding-left: 1.1em; display: grid; gap: 2px;
+  font-size: var(--fs-small); color: var(--color-muted); line-height: 1.55;
+}
+.changelog__empty { color: var(--color-muted); font-size: var(--fs-small); list-style: none; }
