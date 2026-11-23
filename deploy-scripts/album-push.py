@@ -188,10 +188,22 @@ def guest_enabled() -> bool:
 # ---------- 看图令牌（Caddy forward_auth 用）----------
 
 def _load_gates() -> dict:
+    """值统一成 {"exp": 时间戳, "kind": "totp"|"guest"}。
+    旧版写的是裸时间戳，读进来按 guest 处理——保守：旧票不自动获得后台权限。"""
     try:
         d = json.loads(GATE_F.read_text(encoding="utf-8"))
         now = time.time()
-        return {k: float(v) for k, v in d.items() if float(v) > now}
+        out = {}
+        for k, v in d.items():
+            if isinstance(v, dict):
+                exp = float(v.get("exp") or 0)
+                kind = str(v.get("kind") or "guest")
+            else:
+                exp = float(v)
+                kind = "guest"
+            if exp > now:
+                out[k] = {"exp": exp, "kind": "totp" if kind == "totp" else "guest"}
+        return out
     except Exception:
         return {}
 
@@ -205,14 +217,14 @@ def _save_gates():
         pass
 
 
-def issue_gate(ttl: float) -> str:
+def issue_gate(ttl: float, kind: str = "guest") -> str:
     now = time.time()
-    for t in [t for t, e in _gates.items() if e < now]:
+    for t in [t for t, g in _gates.items() if float((g or {}).get("exp") or 0) < now]:
         _gates.pop(t, None)
     while len(_gates) >= GATE_MAX:
         _gates.pop(next(iter(_gates)), None)
     tok = secrets.token_urlsafe(32)
-    _gates[tok] = now + ttl
+    _gates[tok] = {"exp": now + ttl, "kind": "totp" if kind == "totp" else "guest"}
     _save_gates()
     return tok
 
@@ -220,14 +232,20 @@ def issue_gate(ttl: float) -> str:
 def check_gate(tok: str) -> bool:
     if not tok:
         return False
-    exp = _gates.get(tok)
-    if not exp:
+    g = _gates.get(tok)
+    if not g:
         return False
-    if exp < time.time():
+    if float((g or {}).get("exp") or 0) < time.time():
         _gates.pop(tok, None)
         _save_gates()
         return False
     return True
+
+
+def gate_kind(tok: str) -> str:
+    """投票的来历：totp（手机动态码/恢复码）还是 guest（访客口令）。"""
+    g = _gates.get(tok)
+    return str((g or {}).get("kind") or "") if g else ""
 
 
 # ---------- 动态码 TOTP（RFC 6238）----------
@@ -523,7 +541,7 @@ class Handler(BaseHTTPRequestHandler):
 
         ttl = GATE_TTL_TOTP if ok_totp else GATE_TTL_GUEST
         kind = "totp" if ok_totp else "guest"
-        tok = issue_gate(ttl)
+        tok = issue_gate(ttl, kind)
         log(f"门禁通过 ip={self.client_ip()} kind={kind} ttl={int(ttl)}s")
         return self._json(200, {"ok": True, "token": tok, "ttl": int(ttl), "kind": kind})
 
@@ -566,7 +584,12 @@ class Handler(BaseHTTPRequestHandler):
         """令牌优先（进门时校验过），退回一次性口令（老页面 / 运维脚本）。
         开了动态码时，走 X-Admin-Key 的老通道还得多带 X-Admin-Code，否则只靠
         静态口令就能绕过动态码。"""
-        if check_token(self.headers.get("X-Admin-Auth", "")):
+        tok = self.headers.get("X-Admin-Auth", "")
+        if check_token(tok):
+            return True
+        # 2026-11-23：用动态码换来的看图票，等同后台票——同一个人、同一次验证，
+        # 没必要让他在同一个浏览器里再输一遍。访客口令换的票 kind=guest，不给。
+        if check_gate(tok) and gate_kind(tok) == "totp":
             return True
         if not check_key(self.headers.get("X-Admin-Key", "")):
             return False
@@ -713,7 +736,9 @@ def main():
         fmt = "pbkdf2" if raw.startswith("pbkdf2$") else ("旧 sha256 格式（建议 --set-key 升级）" if raw else "未设置")
         print("secret:", fmt, "| token:", "有" if TOKEN_F.exists() else "缺")
         print("totp:  ", "开" if totp_enabled() else "关", "| 恢复码:", _recovery_left(), "个")
-        print("门禁:  ", "访客口令有" if guest_enabled() else "访客口令无", "| 有效票:", len(_gates), "张")
+        n_t = sum(1 for g in _gates.values() if (g or {}).get("kind") == "totp")
+        print("门禁:  ", "访客口令有" if guest_enabled() else "访客口令无",
+              "| 有效票:", len(_gates), "张（动态码", n_t, "/ 访客", len(_gates) - n_t, "）")
         return 0
     if len(sys.argv) >= 2 and sys.argv[1] == "--set-totp":
         secret, codes, uri = make_totp()
