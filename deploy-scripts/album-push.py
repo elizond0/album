@@ -490,22 +490,23 @@ def append_change(entry):
 
 
 def read_changes(limit=30):
+    """按时间倒序返回。不依赖文件里行的先后：补录、时钟回拨、多进程写都可能乱序，
+    直接按 t 排序最省心（t 是 YYYY-MM-DD HH:MM:SS，字典序即时间序）。"""
     try:
         lines = CHANGE_F.read_text(encoding="utf-8").splitlines()
     except OSError:
         return []
-    out = []
-    for ln in reversed(lines):
+    items = []
+    for ln in lines:
         ln = ln.strip()
         if not ln:
             continue
         try:
-            out.append(json.loads(ln))
+            items.append(json.loads(ln))
         except Exception:
             continue
-        if len(out) >= limit:
-            break
-    return out
+    items.sort(key=lambda x: str(x.get("t") or ""), reverse=True)
+    return items[:limit]
 
 
 def check_photos(doc):
