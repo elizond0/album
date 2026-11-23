@@ -19,8 +19,11 @@
   } catch (e) {}
 
   // 票还在有效期内：直接放行，不发任何请求
+  // k 记录这张票的来历：totp（手机动态码/恢复码）或 guest（访客口令）。
+  // admin.html 靠它决定「是否免掉后台口令」——只有 totp 的票才给。
   if (store && store.t && +store.e > Date.now()) {
     window.__ALBUM_K = String(store.t);
+    window.__ALBUM_KIND = String(store.k || "guest");
     return;
   }
   if (store) {
@@ -148,7 +151,11 @@
             try {
               localStorage.setItem(
                 KEY,
-                JSON.stringify({ t: o.j.token, e: Date.now() + (+o.j.ttl || 43200) * 1000 })
+                JSON.stringify({
+                  t: o.j.token,
+                  e: Date.now() + (+o.j.ttl || 43200) * 1000,
+                  k: o.j.kind || "guest"
+                })
               );
             } catch (e) {}
             msg.className = "gate-msg ok";
