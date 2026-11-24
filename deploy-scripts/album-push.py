@@ -723,12 +723,19 @@ class Handler(BaseHTTPRequestHandler):
 
         # 动态码：开了就必须过。口令对了但码不对，不记 note_fail——
         # 否则一个人输错手机验证码会把全站锁一分钟。
+        # 2026-11-24：口令对不对，必须先于动态码判断完。以前是「口令对了但没带码」→
+        # 先回「动态码不对」，等于把「口令正确」这一半信息白送出去（撞对 6 位口令后
+        # 至少知道可以专心算码了）。现在缺码也回「口令或动态码不对」，两种情况同一个口径。
         if totp_enabled():
             code = str((body or {}).get("code") or "")
             if not check_totp(code) and not check_recovery(code):
                 log(f"动态码拒绝 ip={self.client_ip()}")
                 time.sleep(0.4)
-                return self._json(401, {"ok": False, "error": "动态码不对", "totp": True})
+                return self._json(401, {
+                    "ok": False,
+                    "error": "口令不对，或缺少验证器动态码" if not code else "动态码不对",
+                    "totp": True,
+                })
 
         tok = issue_token()
         log(f"进门口令通过 ip={self.client_ip()} ttl={TOKEN_TTL}s")
