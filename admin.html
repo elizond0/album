@@ -22,14 +22,13 @@
 
   <main class="admin">
     <!-- 进门口令：进后台先输一次，由 NAS 的 /api/auth 核验。
-         为什么不放在浏览器里：口令只有 6 位数字，任何写在 JS 里的哈希/明文
-         都是公开的，等于没有。所以「对不对」这件事只有 NAS 知道，页面只拿到
+         为什么不放在浏览器里：任何写在 JS 里的哈希/明文都是公开的，等于没有。所以「对不对」这件事只有 NAS 知道，页面只拿到
          一个有效期很短的一次性令牌（放 sessionStorage，关标签页即失效）。 -->
     <section id="unlock-view" class="login" hidden>
       <div class="modal__card">
         <h2 class="modal__title">管理后台</h2>
-        <p class="modal__hint">输入管理口令进入。口令与 NAS 上保存的哈希比对，浏览器里不存任何副本。</p>
-        <input class="modal__input" id="unlock-input" type="password" inputmode="numeric" placeholder="管理口令" autocomplete="current-password" />
+        <p class="modal__hint">输入管理员口令进入；也可先在相册门禁用动态码/管理员口令换票，票有效时自动进入。口令与 NAS 上保存的哈希比对，浏览器里不存任何副本。</p>
+        <input class="modal__input" id="unlock-input" type="password" inputmode="text" placeholder="管理员口令" autocomplete="current-password" />
         <!-- 动态码：只在 NAS 开了 TOTP 时出现（口令对了但缺码，服务端会提示） -->
         <div id="totp-row" hidden>
           <input class="modal__input" id="totp-input" type="text" inputmode="numeric" maxlength="9"
@@ -49,7 +48,7 @@
       <div class="modal__card">
         <h2 class="modal__title">发布确认</h2>
         <p class="modal__hint">写回仓库前再验一次身份——口令发给家里 NAS 的写入口核对，本机不存哈希。</p>
-        <input class="modal__input" id="gate-input" type="password" placeholder="发布口令（≥6 位）" autocomplete="off" />
+        <input class="modal__input" id="gate-input" type="password" placeholder="管理员口令（≥6 位）" autocomplete="off" />
         <div id="gate-totp-row" hidden>
           <input class="modal__input" id="gate-totp-input" type="text" inputmode="numeric" maxlength="9"
                  placeholder="验证器动态码" autocomplete="one-time-code" />
