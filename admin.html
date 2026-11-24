@@ -47,12 +47,9 @@
     <section id="publish-gate" class="login" hidden>
       <div class="modal__card">
         <h2 class="modal__title">发布确认</h2>
-        <p class="modal__hint">写回仓库前再验一次身份——口令发给家里 NAS 的写入口核对，本机不存哈希。</p>
+        <p class="modal__hint" id="gate-hint">写回仓库前确认一下口令——发给家里 NAS 的写入口核对，本机不存哈希。<br />
+          <strong>这里不用再输动态码</strong>：进后台时已经验过一次，这张票 12 小时内够用。</p>
         <input class="modal__input" id="gate-input" type="password" placeholder="管理员口令（≥6 位）" autocomplete="off" />
-        <div id="gate-totp-row" hidden>
-          <input class="modal__input" id="gate-totp-input" type="text" inputmode="numeric" maxlength="9"
-                 placeholder="验证器动态码" autocomplete="one-time-code" />
-        </div>
         <p class="modal__error" id="gate-error" hidden></p>
         <div class="gate-actions">
           <button class="btn" id="gate-ok" type="button">确认发布</button>
