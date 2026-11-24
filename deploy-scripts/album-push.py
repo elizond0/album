@@ -740,7 +740,13 @@ class Handler(BaseHTTPRequestHandler):
             ttl, kind = GATE_TTL_GUEST, "guest"
         tok = issue_gate(ttl, kind)
         log(f"门禁通过 ip={self.client_ip()} kind={kind} ttl={int(ttl)}s")
-        return self._json(200, {"ok": True, "token": tok, "ttl": int(ttl), "kind": kind})
+        out = {"ok": True, "token": tok, "ttl": int(ttl), "kind": kind}
+        # 2026-11-24：动态码/管理员口令进来的这一趟，顺手把「验过码」的凭证发下去。
+        # 之后后台票过期，发布时只补口令、拿这张签换新票，不用再摸手机。
+        # 访客票（kind=guest）不发：访客本来就不该有发布权。
+        if kind in ("totp", "admin"):
+            out["proof"] = make_proof()
+        return self._json(200, out)
 
     def _auth(self):
         if auth_braked():
