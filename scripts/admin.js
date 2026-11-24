@@ -80,6 +80,17 @@
     el.hidden = !msg;
   }
 
+  /* 进门时只要口令也能过（免动态码）——见下方 gaProof()。
+     它是一张「刚验过动态码」的凭证：服务端用 HMAC 签的短效串，
+     ASCII 原样回传即可，不含密钥、不能被拿去做别的接口。 */
+  const GP_STORE = "album-gp";
+  function gaProof() {
+    try { return sessionStorage.getItem(GP_STORE) || ""; } catch (e) { return ""; }
+  }
+  function keepProof(v) {
+    try { v ? sessionStorage.setItem(GP_STORE, v) : sessionStorage.removeItem(GP_STORE); } catch (e) {}
+  }
+
   async function tryUnlock(key, code) {
     const base = await nasBase();
     if (!base) throw new Error("NO_NAS");
@@ -88,7 +99,7 @@
       r = await ghFetch(`${base}/api/auth`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(code ? { key, code } : { key }),
+        body: JSON.stringify(code ? { key, code } : { key, proof: gaProof() }),
       }, 15000);
     } catch (e) {
       throw new Error(e.name === "AbortError" ? "TIMEOUT" : "NO_NAS");
@@ -96,15 +107,17 @@
     if (r.status === 401) {
       const j = await r.json().catch(() => ({}));
       const err = new Error("BAD_KEY");
-      // 服务端口径：缺动态码 / 码不对 / 口令不对 都可能是 401，具体文案带出来
+      // 口令对不对只有服务端知道；这里把它的原话带出来，不再自己猜
       err.serverMsg = j.error || "";
       err.needTotp = !!j.totp;
+      err.needCode = j.need_code === true;   // 口令对、缺动态码
       throw err;
     }
     if (r.status === 429) throw new Error("TOO_FAST");
     if (!r.ok) throw new Error("HTTP " + r.status);
     const j = await r.json().catch(() => ({}));
     if (!j.ok) throw new Error(j.error || "HTTP " + r.status);
+    if (j.proof) keepProof(j.proof);      // 换一张新鲜的，长期不用会过期
     return j.token || "ok";
   }
 
