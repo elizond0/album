@@ -36,7 +36,7 @@ NAV = """  <header class="nav">
 
 FOOTER = """  <footer class="footer">
     <p><span data-text="footerNote">为了我们的纪念日，页面会一直更新下去</span> <span class="heart" aria-hidden="true">♥</span></p>
-    <p class="form__hint"><span data-text="footerSub">私密分享页面</span></p>
+    <p class="form__hint"><span data-text="footerSub">私密分享页面</span> · <a href="#" id="album-logout" title="清空本机的验证票，回到输码页（自测验证码用）" onclick="window.__ALBUM_LOGOUT&&window.__ALBUM_LOGOUT();return false;">退出</a></p>
     <p class="footer__stamp"><span data-stamp>{stamp}</span></p>
   </footer>"""
 
