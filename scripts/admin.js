@@ -230,9 +230,10 @@
   // 启动：有令牌先进（令牌也可能已过期，发布时会再撞 401），没有就弹进门口令。
   // 2026-11-23：若刚在相册门禁里用动态码验过身（gate.js 留下的票 kind=totp），
   // 这张票服务端也认（_ok_admin 里认），直接进——同一次验证不该让人输两遍。
+  // 2026-11-24：管理员口令换来的票 kind=admin 同权，也直接进。
   // 访客口令换来的票 kind=guest，不享受这条，仍然要口令。
   if (getAuthToken()) enter();
-  else if (window.__ALBUM_K && window.__ALBUM_KIND === "totp") {
+  else if (window.__ALBUM_K && ["totp", "admin"].includes(window.__ALBUM_KIND)) {
     setAuthToken(window.__ALBUM_K);
     enter();
   } else gateIn();
