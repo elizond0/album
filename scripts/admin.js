@@ -781,8 +781,8 @@
     }
 
     let r;
+    const headers = { "Content-Type": "application/json" };   // 循环外声明：每轮都往里写
     for (let attempt = 0; attempt < 2; attempt++) {
-      const headers = { "Content-Type": "application/json" };
       if (key) {
         // 有口令就当场换一张新令牌，别拿口令直接打 /api/save（那条老通道服务端
         // 强制要动态码，等于白问一次）
