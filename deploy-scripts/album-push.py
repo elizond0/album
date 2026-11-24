@@ -82,6 +82,9 @@ DROP_RATIO = 0.95       # 照片数掉到上次的 95% 以下就拒
 PBKDF2_ITER = 200_000
 TOKEN_TTL = 12 * 3600   # 进后台的令牌有效期，够一个下午改文案
 TOKEN_MAX = 200         # 内存里最多留多少个令牌，超了先丢最老的
+# 动态码「过关凭证」：验过一次码之后发一张短效签，之后补令牌只认这张签，
+# 不再反复要码。凭证纯 HMAC 自证，不落盘不进内存，容器重启也只是失效一张旧的。
+PROOF_TTL = 12 * 3600   # 和后台票同寿：一个工作日里验一次码就够
 
 # ── 相册门禁（看图的票）──────────────────────────────────────────
 # 和进后台的令牌分开存：后台票 12 小时、只有 200 个坑；看图的票要能挂 30 天，
@@ -304,6 +307,46 @@ def auth_braked() -> bool:
     while _auth_fail and now - _auth_fail[0] > RATE_WINDOW:
         _auth_fail.popleft()
     return len(_auth_fail) >= AUTH_FAIL_MAX
+
+
+# ---------- 动态码过关凭证（proof）----------
+# 解决「进后台验过码、发布时又被要一次码」：验码通过时发一张自证的短效签，
+# 之后票过期只要拿口令 + 这张签换新票，不再打扰手机。
+# 格式：b64url(json{"e": 过期毫秒}) + "." + b64url(hmac_sha256(密钥, 前半段))
+# 密钥由 push-secret 派生，--set-key 换口令时自动作废全部旧签。
+
+def _proof_key() -> bytes:
+    raw = load_secret() or "no-secret"
+    return hmac.new(raw.encode("utf-8"), b"album-proof-v1", hashlib.sha256).digest()
+
+
+def _b64u(b: bytes) -> str:
+    return base64.urlsafe_b64encode(b).decode("ascii").rstrip("=")
+
+
+def _unb64u(s: str) -> bytes:
+    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+
+
+def make_proof(ttl: int = PROOF_TTL) -> str:
+    payload = _b64u(json.dumps({"e": int((time.time() + ttl) * 1000)},
+                               separators=(",", ":")).encode("utf-8"))
+    sig = _b64u(hmac.new(_proof_key(), payload.encode("ascii"), hashlib.sha256).digest())
+    return payload + "." + sig
+
+
+def proof_ok(proof: str) -> bool:
+    if not proof or proof.count(".") != 1:
+        return False
+    payload, sig = proof.split(".", 1)
+    want = _b64u(hmac.new(_proof_key(), payload.encode("ascii", "ignore"),
+                          hashlib.sha256).digest())
+    if not hmac.compare_digest(sig, want):
+        return False
+    try:
+        return int(json.loads(_unb64u(payload)).get("e") or 0) > time.time() * 1000
+    except Exception:
+        return False
 
 
 def issue_token() -> str:
@@ -726,20 +769,32 @@ class Handler(BaseHTTPRequestHandler):
         # 2026-11-24：口令对不对，必须先于动态码判断完。以前是「口令对了但没带码」→
         # 先回「动态码不对」，等于把「口令正确」这一半信息白送出去（撞对 6 位口令后
         # 至少知道可以专心算码了）。现在缺码也回「口令或动态码不对」，两种情况同一个口径。
-        if totp_enabled():
+        #
+        # 2026-11-24 二次改动：后台「保存并发布」不该再要一次码。
+        # 票过期后前端只补口令，同时带上进门时发的那张 proof（验码通过才有的签）。
+        # 有这张签 = 本浏览器在有效期内确实验过动态码 → 直接换新票，不再要码。
+        # proof 绑定 push-secret（--set-key 即全废），且只能换后台票，碰不到看图的票。
+        proof = str((body or {}).get("proof") or "")
+        if totp_enabled() and not proof_ok(proof):
             code = str((body or {}).get("code") or "")
             if not check_totp(code) and not check_recovery(code):
-                log(f"动态码拒绝 ip={self.client_ip()}")
+                log(f"动态码拒绝 ip={self.client_ip()} 带凭证={bool(proof)}")
                 time.sleep(0.4)
                 return self._json(401, {
                     "ok": False,
                     "error": "口令不对，或缺少验证器动态码" if not code else "动态码不对",
                     "totp": True,
+                    "need_code": True,
                 })
 
         tok = issue_token()
-        log(f"进门口令通过 ip={self.client_ip()} ttl={TOKEN_TTL}s")
-        return self._json(200, {"ok": True, "token": tok, "ttl": TOKEN_TTL})
+        log(f"进门口令通过 ip={self.client_ip()} ttl={TOKEN_TTL}s 凭证={'续' if proof_ok(proof) else '新'}")
+        return self._json(200, {
+            "ok": True,
+            "token": tok,
+            "ttl": TOKEN_TTL,
+            "proof": make_proof(),
+        })
 
     def _ok_admin(self) -> bool:
         """令牌优先（进门时校验过），退回一次性口令（老页面 / 运维脚本）。
