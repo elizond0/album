@@ -123,12 +123,12 @@
 
   <footer class="footer">
     <p><span data-text="footerNote">为了我们的纪念日，页面会一直更新下去</span> <span class="heart" aria-hidden="true">♥</span></p>
-    <p class="form__hint"><span data-text="footerSub">私密分享页面</span> · <a href="admin.html" title="需动态码或访客口令登录">管理后台</a></p>
+    <p class="form__hint"><span data-text="footerSub">私密分享页面</span> · <a href="admin.html" title="需动态码或访客口令登录">管理后台</a> · <a href="#" id="album-logout" title="清空本机的验证票，回到输码页（自测验证码用）" onclick="window.__ALBUM_LOGOUT&amp;&amp;window.__ALBUM_LOGOUT();return false;">退出</a></p>
     <!-- 首页页脚版本文本：构建期写死，不用 data-stamp。
          data-stamp 会被 scripts/site.js 用 content.json 的 builtAt（内容发布时间）覆盖，
          那是「改了内容」的时间，不是「改了页面」的时间，放页面上会被误读成页面版本。
          规则 §B5.11 要求版本号+日期时间在构建期写死，所以这里不挂 data-stamp。 -->
-    <p class="footer__stamp">ver 2026.11.24 19:15</p>
+    <p class="footer__stamp">ver 2026.11.24 21:20</p>
   </footer>
 
   <script src="scripts/site.js"></script>
