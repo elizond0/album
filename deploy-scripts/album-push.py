@@ -31,6 +31,7 @@ push-secret 里同时兼容老格式（盐:sha256），下次 --set-key 自动�
   POST /api/login    {code} → {ok, token, ttl}  相册门禁：动态码或访客口令换看图的票
   GET  /api/gate?k=  → 204/401                  给 Caddy forward_auth 用的校验口
   POST /api/save     需 X-Admin-Auth 或 X-Admin-Key
+  POST /api/save-file 白名单小文件提交（smzdm 词表），需同一套鉴权
   POST /api/pull|run 运维，需 X-Admin-Key
 环境变量：
   ALBUM_PUSH_PORT   默认 8787
@@ -327,10 +328,10 @@ def check_token(tok: str) -> bool:
     return True
 
 
-def gh(path, method="GET", body=None, timeout=90):
+def gh(path, method="GET", body=None, timeout=90, repo=None):
     token = TOKEN_F.read_text(encoding="utf-8").strip()
     req = urllib.request.Request(
-        f"https://api.github.com/repos/{REPO}{path}",
+        f"https://api.github.com/repos/{repo or REPO}{path}",
         method=method,
         data=json.dumps(body).encode() if body is not None else None,
         headers={
@@ -791,6 +792,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._op("pull")
         if p == "/api/run":
             return self._op("run")
+        if p == "/api/save-file":
+            return self._save_file()
         if p != "/api/save":
             return self._json(404, {"ok": False, "error": "not found"})
 
@@ -883,6 +886,78 @@ class Handler(BaseHTTPRequestHandler):
         }
         append_change(entry)
         return self._json(200, {"ok": True, "commit": commit, "archive": saved, "changes": diffs})
+
+    # ── 什么值得买词表提交（白名单化的通用小文件写入）────────────────────
+    # 关注/屏蔽词表从「浏览器手输 GitHub Token」改成走这里：token 留在 NAS，
+    # 用相册同一枚动态码换来的票（kind=totp）即可提交，_ok_admin() 已认可该票。
+    # 只放两个固定文件出去，绝不做成任意路径写入跳板。
+    SMZDM_ALLOW = {
+        "watch": ("elizond0/smzdm-daily", "watchlist.txt", "关注词表"),
+        "block": ("elizond0/smzdm-daily", "blocklist.txt", "屏蔽词表"),
+    }
+
+    def _save_file(self):
+        if self.limited():
+            return self._json(429, {"ok": False, "error": "太频繁了，等一下再试"})
+        if not self._ok_admin():
+            note_fail()
+            log(f"smzdm 提交鉴权拒绝 ip={self.client_ip()}")
+            time.sleep(0.4)
+            return self._json(401, {"ok": False, "error": "需要动态码验证"})
+
+        n = int(self.headers.get("Content-Length") or 0)
+        if n <= 0 or n > MAX_BODY:
+            return self._json(413, {"ok": False, "error": f"体积异常（{n} 字节）"})
+        try:
+            body = json.loads(self.rfile.read(n).decode("utf-8"))
+        except Exception:
+            return self._json(400, {"ok": False, "error": "body 不是 JSON"})
+
+        kind = str((body or {}).get("kind") or "")
+        allow = self.SMZDM_ALLOW.get(kind)
+        if not allow:
+            return self._json(400, {"ok": False, "error": "未知的词表类型",
+                                    "allowed": sorted(self.SMZDM_ALLOW)})
+        repo, path, label = allow
+
+        lines = (body or {}).get("lines")
+        if not isinstance(lines, list) or any(not isinstance(x, str) for x in lines):
+            return self._json(422, {"ok": False, "error": "lines 必须是字符串数组"})
+        clean = []
+        for x in lines:
+            x = x.strip()
+            if x and x not in clean and len(x) <= 200:
+                clean.append(x)
+        content = ("\n".join(clean) + "\n").encode("utf-8")
+
+        try:
+            s, j = gh(f"/contents/{path}?ref={BRANCH}", repo=repo)
+            sha = j.get("sha") if s == 200 else None
+            payload = {
+                "message": now_cn(f"smzdm: 更新{label}（%Y-%m-%d %H:%M）"),
+                "content": base64.b64encode(content).decode(),
+                "branch": BRANCH,
+            }
+            if sha:
+                payload["sha"] = sha
+            s, r = gh(f"/contents/{path}", "PUT", payload, timeout=120, repo=repo)
+            commit = (r.get("commit") or {}).get("sha", "")
+        except urllib.error.HTTPError as e:
+            detail = ""
+            try:
+                detail = json.loads(e.read().decode()).get("message", "")
+            except Exception:
+                pass
+            code = 409 if e.code == 409 else 502
+            log(f"smzdm 提交失败 HTTP {e.code} {detail}")
+            return self._json(code, {"ok": False, "error": f"GitHub 返回 {e.code}：{detail}"})
+        except Exception as e:
+            log(f"smzdm 提交异常: {type(e).__name__}: {e}")
+            return self._json(502, {"ok": False, "error": "连不上 GitHub"})
+
+        log(f"smzdm {path} 提交成功 commit={commit[:7]} words={len(clean)} ip={self.client_ip()}")
+        return self._json(200, {"ok": True, "words": len(clean),
+                                "commit": commit, "path": path})
 
     def log_message(self, fmt, *args):        # 别把默认访问日志刷进 journal
         pass
