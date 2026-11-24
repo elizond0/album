@@ -19,8 +19,8 @@
   } catch (e) {}
 
   // 票还在有效期内：直接放行，不发任何请求
-  // k 记录这张票的来历：totp（手机动态码/恢复码）或 guest（访客口令）。
-  // admin.html 靠它决定「是否免掉后台口令」——只有 totp 的票才给。
+  // k 记录这张票的来历：totp（手机动态码/恢复码）、admin（管理员口令）或 guest（访客口令）。
+  // admin.html 靠它决定「是否免掉后台口令」——totp 与 admin 都免，guest 不免。
   if (store && store.t && +store.e > Date.now()) {
     window.__ALBUM_K = String(store.t);
     window.__ALBUM_KIND = String(store.k || "guest");
@@ -86,13 +86,13 @@
     box.innerHTML =
       '<form class="gate-card" autocomplete="off">' +
       "<h1>这是私人相册</h1>" +
-      "<p>输入验证器上的 6 位动态码，或家人用的访客口令。</p>" +
+      "<p>输入验证器上的 6 位动态码，或管理员口令。</p>" +
       '<input class="gate-input" type="text" name="code" inputmode="text" ' +
       'autocomplete="one-time-code" autocapitalize="off" autocorrect="off" spellcheck="false" ' +
-      'placeholder="6 位数字 / 访客口令" />' +
+      'placeholder="6 位数字 / 管理员口令" />' +
       '<button class="gate-btn" type="submit">进入</button>' +
       '<div class="gate-msg"></div>' +
-      '<div class="gate-foot">验证一次可看 12 小时（访客口令 30 天）。<br />' +
+      '<div class="gate-foot">验证一次可看 12 小时。<br />' +
       "票只存在这台设备上，公共电脑用完记得点左下角的小点退出。</div>" +
       "</form>";
     document.body.appendChild(box);
