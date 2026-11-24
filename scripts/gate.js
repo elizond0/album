@@ -88,6 +88,15 @@
   docEl.className += " gate-locked";
 
   var BASE = "";        // 从 base.json 取，异步
+  /* 上一次拿到的 API 地址存 sessionStorage：退出后整页重载，base.json 要重拉，
+     慢的时候要等好几秒才输得了码。有缓存就先顶上，loadBase 回来再覆盖。
+     键名故意不带 - / _，purge() 只清 album-*，所以退出不会把它一起清掉；
+     隧道域名变了由 loadBase 覆盖修正，最坏情况多试一次。 */
+  var BASE_CACHE = "albumBase";
+  try {
+    BASE = String(sessionStorage.getItem(BASE_CACHE) || "").replace(/\/+$/, "");
+  } catch (e) {}
+
   var mounted = false;
 
   function css() {
@@ -262,10 +271,14 @@
         return r.json();
       })
       .then(function (j) {
-        BASE = String((j && j.base) || "").replace(/\/+$/, "");
+        var v = String((j && j.base) || "").replace(/\/+$/, "");
+        if (v) {
+          BASE = v;
+          try { sessionStorage.setItem(BASE_CACHE, v); } catch (e) {}
+        }
       })
       .catch(function () {
-        BASE = "";
+        // 拉不到就沿用缓存里的地址；两条路都空才真的没法用
       })
       .then(function () {
         if (cb) cb();
