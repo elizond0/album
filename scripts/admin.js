@@ -745,6 +745,7 @@
     NET: "连不上 GitHub（网络被拦或超时），可以改用「仅下载」",
     TIMEOUT: "等了两分钟没回音，网络太慢或被拦了，改用「仅下载」更快",
     BAD_KEY: "口令不对：要跟 NAS 上 push-secret 设的是同一个",
+    PROOF_GONE: "口令是对的，但这次登录的验证凭证过期了——刷新页面（或点右上角「退出管理」）用动态码重新进一次就行，不用改口令",
     CANCELLED: "已取消发布（没输口令，什么都没提交）",
     NO_KEY: "没输口令",
     NO_NAS: "连不上 NAS 的写入口（NAS 离线 / 隧道刚换域名还没同步）",
@@ -805,7 +806,11 @@
         } catch (e) {
           if (e && e.message === "TOO_FAST") throw new Error("TOO_FAST");
           if (e && e.message === "BAD_KEY") {
-            const n = new Error("BAD_KEY");
+            // 服务端只说「口令不对，或缺少验证器动态码」——两种情况它故意不区分，
+            // 免得泄露口令对不对。但对已经坐在后台里的人来说，这个提示会让
+            // 他去翻口令。所以这里按有没有凭证分开讲：手里没凭证 = 多半是
+            // 刷新过/换过浏览器，重新用动态码进一次就好，不是口令错。
+            const n = new Error(gaProof() ? "BAD_KEY" : "PROOF_GONE");
             n.serverMsg = e.serverMsg || "";
             throw n;
           }
