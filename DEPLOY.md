@@ -105,8 +105,8 @@ sh scripts/release.sh
 
 ## 四、日常更新：改文案 / 调首页
 
-全部在 `admin.html` 里做。前台已移除所有后台入口，需要手动输入
-`https://elizond0.github.io/album/admin.html`：
+全部在 `admin.html` 里做。首页页脚保留一个「管理后台」入口（受门禁保护），
+其余前台页面不设；也可手动输入 `https://elizond0.github.io/album/admin.html`：
 
 1. 打开后台，输管理口令（**见云盘根目录 `凭据.md` §1.1**，不在仓库里，也不在本文）
 2. 改完点右上角 **「保存并发布」**。请求发给家里 NAS 上的 `album-push.py`
@@ -276,9 +276,11 @@ python3 /var/lib/tailscale/mkthumb.py /srv/pub --clean      # 清空 img/t/ 后�
 
 `admin.html` 的口令做 SHA-256 哈希比对，默认值写在 `scripts/admin.js` 的 `DEFAULT_HASH`。
 它挡的是「随手翻到链接的人」，不是真正的账号系统 —— 哈希在公开仓库里，懂技术的人可以暴破。
-前台页面已无任何跳转入口，`admin.html` 自身带 `noindex, nofollow`；真正的保护只有
-「知道完整 URL 的人才找得到」，**不要把它当成访问控制**。公开仓库里的
-`data/content.json` 和 NAS 媒体直链本来就能直接取到，纯静态站做不到服务端鉴权。
+首页页脚保留一个 `admin.html` 跳转入口，其余前台页面不设；`admin.html` 自身带
+`noindex, nofollow`。2026-11-24 起有 TOTP 动态码门禁：有效票（12 h）可进后台，
+访客票（30 天）仍要后台口令；真正的保护是门禁票与口令，**不再只是隐藏 URL**，
+但仍**不要把它当成服务端账号系统**。公开仓库里的 `data/content.json` 本来就能直接取到，
+NAS 媒体直链则由 Caddy `forward_auth` 拦住，纯静态站做不到完整的服务端鉴权。
 
 忘了改过的口令：清掉本站的浏览器存储（localStorage），会回到默认口令。
 
@@ -482,7 +484,7 @@ python3 -m http.server 8791   # 本地起站
 - 照片墙：地点筛选里数量之和 = 照片总数
 - 后台：改一个数字 → 直接点「保存并导出」→ 下载的 json 里能查到改动，
   且 `src` 仍是相对路径（不含 `https://`）、没有残留 `thumb` 字段
-- 前台六个页面都**没有** `admin.html` 链接
+- 首页页脚有 **1 个** `admin.html` 链接，其余五个前台页面都**没有**；无有效门禁票时点进去会先落门禁页
 - NAS 侧：`tail -f /var/lib/tailscale/base-sync.log` 能看到 `OK 地址未变`
 - NAS 侧幂等：**连跑两遍 `nas-setup.sh`，第二遍必须是 `skip 562` + 16 个 `SKIP`**。
   出现 `START` 就说明增量判据失效，白烧 CPU（见坑 7）
