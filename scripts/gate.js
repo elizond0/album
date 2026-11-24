@@ -21,7 +21,7 @@
      album-admin-hash / album-admin-key，只清门禁票会出现「页脚看着退了、
      后台还是登录态」的鬼影，测验证码时最容易误判。 */
   var DROP_LOCAL = ["album_gate_v1", "album-admin-hash", "album-admin-key"];
-  var DROP_SESSION = ["album-admin-token", "album-admin-key"];
+  var DROP_SESSION = ["album-admin-token", "album-admin-key", "album-gp"];
 
   function purge() {
     DROP_LOCAL.forEach(function (k) {
@@ -245,6 +245,12 @@
                   k: o.j.kind || "guest"
                 })
               );
+            } catch (e) {}
+            // 服务端验过动态码/管理员口令时会给一张短效凭证。存着它，
+            // 后台票过期后「保存并发布」只补口令就能换新票，不必再输动态码。
+            // 访客票不会有这张签，所以家人那边不受影响。
+            try {
+              if (o.j.proof) sessionStorage.setItem("album-gp", o.j.proof);
             } catch (e) {}
             msg.className = "gate-msg ok";
             msg.textContent = "验证通过，正在打开…";
