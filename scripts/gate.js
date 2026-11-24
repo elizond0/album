@@ -200,8 +200,16 @@
         return;
       }
       if (!BASE) {
-        msg.textContent = "还没拿到相册地址，稍等一下再试";
-        loadBase();
+        // 刚退出/刚打开时 base.json 还在路上。别让人再点一次——
+        // 挂着「正在连接」，拿到地址自动续上这次提交。
+        msg.className = "gate-msg";
+        msg.textContent = "正在连接相册…";
+        btn.disabled = true;
+        loadBase(function () {
+          btn.disabled = false;
+          if (BASE) form.dispatchEvent(new Event("submit", { cancelable: true }));
+          else msg.textContent = "连不上相册，刷新页面再试";
+        });
         return;
       }
       btn.disabled = true;
@@ -248,7 +256,7 @@
     });
   }
 
-  function loadBase() {
+  function loadBase(cb) {
     fetch("base.json?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) {
         return r.json();
@@ -258,6 +266,9 @@
       })
       .catch(function () {
         BASE = "";
+      })
+      .then(function () {
+        if (cb) cb();
       });
   }
 
