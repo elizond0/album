@@ -28,7 +28,7 @@ push-secret 里同时兼容老格式（盐:sha256），下次 --set-key 自动�
 接口：
   GET  /api/health   存活 + 有没有设过口令
   POST /api/auth     {key} → {ok, token, ttl}   进后台的令牌（默认 12 小时）
-  POST /api/login    {code} → {ok, token, ttl}  相册门禁：动态码或访客口令换看图的票
+  POST /api/login    {code} → {ok, token, ttl, kind}  相册门禁：动态码/管理员口令/访客口令换看图的票
   GET  /api/gate?k=  → 204/401                  给 Caddy forward_auth 用的校验口
   POST /api/save     需 X-Admin-Auth 或 X-Admin-Key
   POST /api/save-file 白名单小文件提交（smzdm 词表），需同一套鉴权
@@ -186,7 +186,7 @@ def _check_hash(path: Path, key: str) -> bool:
 
 
 def check_guest(key: str) -> bool:
-    """访客口令：只给看，不给改。没设就返回 False（门禁只认动态码）。"""
+    """访客口令：只给看，不给改。没设就返回 False（门禁只认动态码/管理员口令）。"""
     return _check_hash(GUEST_F, key)
 
 
@@ -197,7 +197,7 @@ def guest_enabled() -> bool:
 # ---------- 看图令牌（Caddy forward_auth 用）----------
 
 def _load_gates() -> dict:
-    """值统一成 {"exp": 时间戳, "kind": "totp"|"guest"}。
+    """值统一成 {"exp": 时间戳, "kind": "totp"|"admin"|"guest"}。
     旧版写的是裸时间戳，读进来按 guest 处理——保守：旧票不自动获得后台权限。"""
     try:
         d = json.loads(GATE_F.read_text(encoding="utf-8"))
@@ -211,7 +211,8 @@ def _load_gates() -> dict:
                 exp = float(v)
                 kind = "guest"
             if exp > now:
-                out[k] = {"exp": exp, "kind": "totp" if kind == "totp" else "guest"}
+                kind = "totp" if kind == "totp" else ("admin" if kind == "admin" else "guest")
+                out[k] = {"exp": exp, "kind": kind}
         return out
     except Exception:
         return {}
@@ -233,7 +234,8 @@ def issue_gate(ttl: float, kind: str = "guest") -> str:
     while len(_gates) >= GATE_MAX:
         _gates.pop(next(iter(_gates)), None)
     tok = secrets.token_urlsafe(32)
-    _gates[tok] = {"exp": now + ttl, "kind": "totp" if kind == "totp" else "guest"}
+    kind = "totp" if kind == "totp" else ("admin" if kind == "admin" else "guest")
+    _gates[tok] = {"exp": now + ttl, "kind": kind}
     _save_gates()
     return tok
 
@@ -252,7 +254,7 @@ def check_gate(tok: str) -> bool:
 
 
 def gate_kind(tok: str) -> str:
-    """投票的来历：totp（手机动态码/恢复码）还是 guest（访客口令）。"""
+    """投票的来历：totp（手机动态码/恢复码）、admin（管理员口令）或 guest（访客口令）。"""
     g = _gates.get(tok)
     return str((g or {}).get("kind") or "") if g else ""
 
@@ -676,16 +678,23 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(400, {"ok": False, "error": "没填验证码"})
 
         ok_totp = totp_enabled() and (check_totp(code) or check_recovery(code))
-        ok_guest = (not ok_totp) and check_guest(code)
+        ok_admin = (not ok_totp) and check_key(code)
+        ok_guest = (not ok_totp) and (not ok_admin) and check_guest(code)
 
-        if not (ok_totp or ok_guest):
+        if not (ok_totp or ok_admin or ok_guest):
             hit = note_fail()
             log(f"门禁拒绝 ip={self.client_ip()} 窗口内失败={hit}")
             time.sleep(0.4)
             return self._json(401, {"ok": False, "error": "验证码或口令不对"})
 
-        ttl = GATE_TTL_TOTP if ok_totp else GATE_TTL_GUEST
-        kind = "totp" if ok_totp else "guest"
+        if ok_totp:
+            ttl, kind = GATE_TTL_TOTP, "totp"
+        elif ok_admin:
+            # 管理员口令与动态码同权：都是「自己人」，都能进后台改内容。
+            # 只是 TTL 仍按动态码的 12 小时，不沿用访客的 30 天。
+            ttl, kind = GATE_TTL_TOTP, "admin"
+        else:
+            ttl, kind = GATE_TTL_GUEST, "guest"
         tok = issue_gate(ttl, kind)
         log(f"门禁通过 ip={self.client_ip()} kind={kind} ttl={int(ttl)}s")
         return self._json(200, {"ok": True, "token": tok, "ttl": int(ttl), "kind": kind})
@@ -734,7 +743,8 @@ class Handler(BaseHTTPRequestHandler):
             return True
         # 2026-11-23：用动态码换来的看图票，等同后台票——同一个人、同一次验证，
         # 没必要让他在同一个浏览器里再输一遍。访客口令换的票 kind=guest，不给。
-        if check_gate(tok) and gate_kind(tok) == "totp":
+        # 2026-11-24：管理员口令换来的票 kind=admin 也照此办理，与动态码同权。
+        if check_gate(tok) and gate_kind(tok) in ("totp", "admin"):
             return True
         if not check_key(self.headers.get("X-Admin-Key", "")):
             return False
@@ -889,7 +899,7 @@ class Handler(BaseHTTPRequestHandler):
 
     # ── 什么值得买词表提交（白名单化的通用小文件写入）────────────────────
     # 关注/屏蔽词表从「浏览器手输 GitHub Token」改成走这里：token 留在 NAS，
-    # 用相册同一枚动态码换来的票（kind=totp）即可提交，_ok_admin() 已认可该票。
+    # 用相册同一枚动态码/管理员口令换来的票（kind=totp/admin）即可提交，_ok_admin() 已认可该票。
     # 只放两个固定文件出去，绝不做成任意路径写入跳板。
     SMZDM_ALLOW = {
         "watch": ("elizond0/smzdm-daily", "watchlist.txt", "关注词表"),
@@ -971,7 +981,7 @@ def main():
         # 但拿着旧票的浏览器还能再看 30 天——「换口令」在人的心里就是
         # 「之前发出去的那张通行证作废」，不吊销等于没换干净。
         killed = [t for t, g in _gates.items()
-                  if str((g or {}).get("kind") or "guest") != "totp"]
+                  if str((g or {}).get("kind") or "guest") not in ("totp", "admin")]
         for t in killed:
             _gates.pop(t, None)
         if killed:
@@ -984,7 +994,14 @@ def main():
             GUEST_F.unlink()
         except OSError:
             pass
-        print("访客口令已关闭，门禁只认动态码")
+        # 关访客入口时顺手吊销所有访客票；动态码/管理员票保留。
+        killed = [t for t, g in _gates.items()
+                  if str((g or {}).get("kind") or "guest") == "guest"]
+        for t in killed:
+            _gates.pop(t, None)
+        if killed:
+            _save_gates()
+        print(f"访客口令已关闭，门禁只认动态码/管理员口令；已吊销旧访客票 {len(killed)} 张")
         return 0
     if len(sys.argv) >= 3 and sys.argv[1] == "--set-key":
         make_secret(sys.argv[2])
@@ -996,8 +1013,10 @@ def main():
         print("secret:", fmt, "| token:", "有" if TOKEN_F.exists() else "缺")
         print("totp:  ", "开" if totp_enabled() else "关", "| 恢复码:", _recovery_left(), "个")
         n_t = sum(1 for g in _gates.values() if (g or {}).get("kind") == "totp")
+        n_a = sum(1 for g in _gates.values() if (g or {}).get("kind") == "admin")
         print("门禁:  ", "访客口令有" if guest_enabled() else "访客口令无",
-              "| 有效票:", len(_gates), "张（动态码", n_t, "/ 访客", len(_gates) - n_t, "）")
+              "| 有效票:", len(_gates), "张（动态码", n_t, "/ 管理员", n_a,
+              "/ 访客", len(_gates) - n_t - n_a, "）")
         return 0
     if len(sys.argv) >= 2 and sys.argv[1] == "--set-totp":
         secret, codes, uri = make_totp()
