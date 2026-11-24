@@ -124,15 +124,15 @@
          尺寸按手指点得中算（高 34px 上下），不是那种 16px 藏起来的小点。 */
       ".gate-out{position:fixed;right:14px;bottom:14px;z-index:100000;display:inline-flex;",
       "align-items:center;gap:5px;padding:9px 15px;font-family:inherit;font-size:13px;",
-      "line-height:1;letter-spacing:.08em;color:#6e6a61;background:rgba(251,250,247,.93);",
-      "border:1px solid rgba(44,42,38,.14);border-radius:999px;cursor:pointer;opacity:.5;",
+      "line-height:1;letter-spacing:.08em;color:#5b574f;background:rgba(251,250,247,.95);",
+      "border:1px solid rgba(44,42,38,.2);border-radius:999px;cursor:pointer;opacity:.72;",
       "-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);",
       "transition:opacity .2s,color .2s,border-color .2s,box-shadow .2s}",
       ".gate-out:hover,.gate-out:focus-visible{opacity:1;color:#7a5c3a;",
-      "border-color:rgba(122,92,58,.42);box-shadow:0 6px 18px rgba(46,42,36,.13);outline:none}",
+      "border-color:rgba(122,92,58,.5);box-shadow:0 6px 18px rgba(46,42,36,.15);outline:none}",
       ".gate-out:active{transform:translateY(1px)}",
       "@media (max-width:520px){.gate-out{right:10px;bottom:10px;padding:8px 13px;",
-      "font-size:12.5px;opacity:.62}}",
+      "font-size:12.5px;opacity:.82}}",
       "@media print{.gate-out{display:none}}"
     ].join("");
     return s;
