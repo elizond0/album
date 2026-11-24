@@ -1,9 +1,10 @@
 /* gate.js —— 相册门禁（页面级）
  *
  * 放在每个页面 <head> 里、且必须早于 scripts/site.js。
- * 职责只有两件：
+ * 职责三件：
  *   1. 有票 → window.__ALBUM_K 交给 site.js，让它给每个图片/视频地址拼 ?k=
  *   2. 没票 → 把整页藏起来，只显示一个输码的卡片；验过再整页重载
+ *   3. 有票时右下角挂一个「退出」按钮 → 清掉本机验证痕迹再硬重载
  *
  * 为什么不是「验过之后局部显示」：内容脚本一旦开跑就会去拉 content.json 和
  * 几十张图，全得 401。整页重载最省事，也最不容易漏掉某个加载入口。
@@ -13,6 +14,56 @@
  */
 (function () {
   var KEY = "album_gate_v1";
+
+  /* ---------- 退出：清掉本机所有验证痕迹 ----------
+     只清本相册自己的键，同域下别的工具（值得买、PDF 工具站）不受牵连。
+     为什么不止清 album_gate_v1：后台令牌在 sessionStorage，旧版还留过
+     album-admin-hash / album-admin-key，只清门禁票会出现「页脚看着退了、
+     后台还是登录态」的鬼影，测验证码时最容易误判。 */
+  var DROP_LOCAL = ["album_gate_v1", "album-admin-hash", "album-admin-key"];
+  var DROP_SESSION = ["album-admin-token", "album-admin-key"];
+
+  function purge() {
+    DROP_LOCAL.forEach(function (k) {
+      try { localStorage.removeItem(k); } catch (e) {}
+    });
+    DROP_SESSION.forEach(function (k) {
+      try { sessionStorage.removeItem(k); } catch (e) {}
+    });
+    // 兜底：以后新加的 album-* 键也不会漏。album-admin-totp 只是「后台已开
+    // 动态码」的 UI 记忆，不是票，留着省得每次进后台重新勾一遍。
+    try {
+      Object.keys(localStorage).forEach(function (k) {
+        if (/^album[-_]/i.test(k) && k !== "album-admin-totp") localStorage.removeItem(k);
+      });
+    } catch (e) {}
+    try {
+      Object.keys(sessionStorage).forEach(function (k) {
+        if (/^album[-_]/i.test(k)) sessionStorage.removeItem(k);
+      });
+    } catch (e) {}
+  }
+
+  function logout() {
+    purge();
+    // 带时间戳走 replace：① 绕过 index 的 HTTP 缓存，② 后退不会回到
+    // 已经解锁过的页面快照。之后由下面那段把 out 参数从地址栏抹掉。
+    var u = location.pathname + "?out=" + Date.now();
+    if (location.hash) u += location.hash;
+    location.replace(u);
+  }
+  window.__ALBUM_LOGOUT = logout;
+
+  // 退出留下的 ?out=xxx 只是缓存戳，别让它赖在地址栏里
+  try {
+    var us = new URLSearchParams(location.search);
+    if (us.has("out")) {
+      us.delete("out");
+      var qs = us.toString();
+      history.replaceState(null, "", location.pathname + (qs ? "?" + qs : "") + location.hash);
+    }
+  } catch (e) {}
+
   var store = null;
   try {
     store = JSON.parse(localStorage.getItem(KEY) || "null");
@@ -24,6 +75,7 @@
   if (store && store.t && +store.e > Date.now()) {
     window.__ALBUM_K = String(store.t);
     window.__ALBUM_KIND = String(store.k || "guest");
+    mountExit();
     return;
   }
   if (store) {
@@ -68,12 +120,45 @@
       ".gate-msg.ok{color:#4d7a5b}",
       ".gate-foot{margin-top:18px;padding-top:14px;border-top:1px solid rgba(44,42,38,.08);",
       "font-size:11.5px;line-height:1.8;color:#9a948a}",
-      ".gate-reset{position:fixed;left:8px;bottom:6px;z-index:100000;width:16px;height:16px;border:0;",
-      "border-radius:50%;background:transparent;color:#a9a29a;font-size:12px;line-height:16px;",
-      "text-align:center;cursor:pointer;opacity:.3;transition:opacity .2s}",
-      ".gate-reset:hover{opacity:.95;color:#7a5c3a}"
+      /* 右下角常驻的「退出」：平时半透明不抢戏，摸上去变实。
+         尺寸按手指点得中算（高 34px 上下），不是那种 16px 藏起来的小点。 */
+      ".gate-out{position:fixed;right:14px;bottom:14px;z-index:100000;display:inline-flex;",
+      "align-items:center;gap:5px;padding:9px 15px;font-family:inherit;font-size:13px;",
+      "line-height:1;letter-spacing:.08em;color:#6e6a61;background:rgba(251,250,247,.93);",
+      "border:1px solid rgba(44,42,38,.14);border-radius:999px;cursor:pointer;opacity:.5;",
+      "-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);",
+      "transition:opacity .2s,color .2s,border-color .2s,box-shadow .2s}",
+      ".gate-out:hover,.gate-out:focus-visible{opacity:1;color:#7a5c3a;",
+      "border-color:rgba(122,92,58,.42);box-shadow:0 6px 18px rgba(46,42,36,.13);outline:none}",
+      ".gate-out:active{transform:translateY(1px)}",
+      "@media (max-width:520px){.gate-out{right:10px;bottom:10px;padding:8px 13px;",
+      "font-size:12.5px;opacity:.62}}",
+      "@media print{.gate-out{display:none}}"
     ].join("");
     return s;
+  }
+
+  /* ---------- 右下角「退出」按钮 ----------
+     只挂一次。后台页自己导航栏里已有「退出管理」，这里就不重复放一个。 */
+  function mountExit() {
+    function add() {
+      if (!document.body) return;
+      if (document.querySelector(".gate-out")) return;
+      if (document.getElementById("logout-btn")) return;
+      document.head.appendChild(css());
+      var b = document.createElement("button");
+      b.className = "gate-out";
+      b.type = "button";
+      b.title = "清空本机的验证票，回到输码页（改完验证码用它自测）";
+      b.textContent = "退出";
+      b.addEventListener("click", logout);
+      document.body.appendChild(b);
+    }
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", add);
+    } else {
+      add();
+    }
   }
 
   function mount() {
@@ -93,23 +178,9 @@
       '<button class="gate-btn" type="submit">进入</button>' +
       '<div class="gate-msg"></div>' +
       '<div class="gate-foot">验证一次可看 12 小时。<br />' +
-      "票只存在这台设备上，公共电脑用完记得点左下角的小点退出。</div>" +
+      "票只存在这台设备上。想换码重验，点右下角「退出」。</div>" +
       "</form>";
     document.body.appendChild(box);
-
-    // 左下角的「重新验证」小点：图片整片裂掉时点一下，清票重来
-    var reset = document.createElement("button");
-    reset.className = "gate-reset";
-    reset.type = "button";
-    reset.title = "重新验证";
-    reset.textContent = "×";
-    reset.addEventListener("click", function () {
-      try {
-        localStorage.removeItem(KEY);
-      } catch (e) {}
-      location.reload();
-    });
-    document.body.appendChild(reset);
 
     var form = box.querySelector("form");
     var input = box.querySelector(".gate-input");
