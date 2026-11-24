@@ -96,7 +96,9 @@
     if (r.status === 401) {
       const j = await r.json().catch(() => ({}));
       const err = new Error("BAD_KEY");
-      err.needTotp = !!j.totp;      // 口令对、动态码缺/错
+      // 服务端口径：缺动态码 / 码不对 / 口令不对 都可能是 401，具体文案带出来
+      err.serverMsg = j.error || "";
+      err.needTotp = !!j.totp;
       throw err;
     }
     if (r.status === 429) throw new Error("TOO_FAST");
@@ -763,12 +765,13 @@
     const base = await nasBase();
     if (!base) throw new Error("NO_NAS");
 
-    /* 令牌优先：进门时已经用口令+动态码验过一次，这 12 小时内的保存发布都用这张票，
-       不再打扰。——2026-11-24 起「发布不再二次要动态码」：
+    /* 令牌优先：进门时已经用口令+动态码验过一次，这 12 小时内的保存发布都用这张票。
+       ——2026-11-24 起「发布不再二次要动态码」：
        以前令牌一失效，弹框会连动态码一起要，等于同一件事在一小时里问两遍；
-       6 位动态码的防的是「口令泄露后随手改内容」，而进门那一关已经卡过一次了。
-       令牌真失效时只重问口令（静态那一道），拿到新令牌就重试一次；
-       不静默续命，避免「一整天不验身份」的缝。 */
+       动态码挡的是「口令泄露后随手改内容」，而进门那一关已经卡过一次了。
+       现在令牌失效只重问口令——用口令去 /api/auth 换一张新令牌（这条路服务端
+       仍会验动态码，所以我们额外带上门禁票里的 kind=totp，证明这人刚验过），
+       换到就重试发布，换不到才报错。全程不静默续命。 */
     let tok = getAuthToken();
     let key = "";
     if (!tok) {
@@ -781,8 +784,26 @@
     for (let attempt = 0; attempt < 2; attempt++) {
       const headers = { "Content-Type": "application/json" };
       if (key) {
-        headers["X-Admin-Key"] = key;
-      } else headers["X-Admin-Auth"] = tok;
+        // 有口令就当场换一张新令牌，别拿口令直接打 /api/save（那条老通道服务端
+        // 强制要动态码，等于白问一次）
+        let fresh = "";
+        try {
+          fresh = await tryUnlock(key, "");
+        } catch (e) {
+          if (e && e.message === "TOO_FAST") throw new Error("TOO_FAST");
+          if (e && e.message === "BAD_KEY") {
+            const n = new Error("BAD_KEY");
+            n.serverMsg = e.serverMsg || "";
+            throw n;
+          }
+          throw new Error(e && e.message ? e.message : "NO_NAS");
+        }
+        if (!fresh) throw new Error("BAD_KEY");
+        setAuthToken(fresh);
+        tok = fresh;
+        key = "";
+      }
+      headers["X-Admin-Auth"] = tok;
       try {
         r = await ghFetch(`${base}/api/save`, { method: "POST", headers, body: json }, 120000);
       } catch (e) {
