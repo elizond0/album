@@ -366,15 +366,12 @@
     const sec = $("#publish-gate");
     const err = $("#gate-error");
     const inp = $("#gate-input");
-    const crow = $("#gate-totp-row");
-    const cin = $("#gate-totp-input");
     sec.hidden = false;
     inp.value = "";
-    if (cin) cin.value = "";
-    if (crow) crow.hidden = !totpKnownOn();
-    (crow && !crow.hidden && cin ? cin : inp).focus();
+    inp.focus();
     if (msg) { err.textContent = msg; err.hidden = false; } else { err.hidden = true; }
-    // 返回 {key, code}；取消返回 null
+    // 只收口令，返回 {key}；取消返回 null。
+    // 动态码那一格留在 HTML 里但永远不展开——进门时已经验过，发布不再问第二次。
     return new Promise((res) => { gateResolve = res; });
   }
 
@@ -387,22 +384,16 @@
 
   $("#gate-ok").addEventListener("click", () => {
     const k = $("#gate-input").value.trim();
-    const crow = $("#gate-totp-row");
-    const c = (crow && !crow.hidden && $("#gate-totp-input")) ? $("#gate-totp-input").value.trim() : "";
     const err = $("#gate-error");
     if (k.length < 6) {
       err.textContent = "口令至少 6 位。";
       err.hidden = false;
       return;
     }
-    closeGate({ key: k, code: c });
+    // 发布只收口令：动态码在进门那一关已经验过了，不在这里问第二遍
+    closeGate({ key: k });
   });
   $("#gate-input").addEventListener("keydown", (e) => {
-    if (e.key === "Enter") $("#gate-ok").click();
-    if (e.key === "Escape") closeGate(null);
-  });
-  const gin = $("#gate-totp-input");
-  if (gin) gin.addEventListener("keydown", (e) => {
     if (e.key === "Enter") $("#gate-ok").click();
     if (e.key === "Escape") closeGate(null);
   });
@@ -772,14 +763,18 @@
     const base = await nasBase();
     if (!base) throw new Error("NO_NAS");
 
-    // 进门时拿到的令牌先顶上（省得每次发布都重输口令）；令牌过期了 NAS 会回 401，
-    // 这时才现问口令，且只重试一次——口令只有 6 位，不能让它被反复试。
+    /* 令牌优先：进门时已经用口令+动态码验过一次，这 12 小时内的保存发布都用这张票，
+       不再打扰。——2026-11-24 起「发布不再二次要动态码」：
+       以前令牌一失效，弹框会连动态码一起要，等于同一件事在一小时里问两遍；
+       6 位动态码的防的是「口令泄露后随手改内容」，而进门那一关已经卡过一次了。
+       令牌真失效时只重问口令（静态那一道），拿到新令牌就重试一次；
+       不静默续命，避免「一整天不验身份」的缝。 */
     let tok = getAuthToken();
-    let key = "", code = "";
+    let key = "";
     if (!tok) {
       const got = await askKey(gateRetry ? "口令不对，再输一次。" : "");
       if (!got) throw new Error("CANCELLED");
-      key = got.key; code = got.code;
+      key = got.key;
     }
 
     let r;
@@ -787,7 +782,6 @@
       const headers = { "Content-Type": "application/json" };
       if (key) {
         headers["X-Admin-Key"] = key;
-        if (code) headers["X-Admin-Code"] = code;   // 开了动态码时这条通道也得带
       } else headers["X-Admin-Auth"] = tok;
       try {
         r = await ghFetch(`${base}/api/save`, { method: "POST", headers, body: json }, 120000);
@@ -796,13 +790,11 @@
       }
       if (r.status !== 401) break;
       if (attempt === 1) throw new Error("BAD_KEY");
-      // 令牌失效：清掉，改问口令（必要时连动态码一起问）
+      // 令牌失效（过期或 NAS 重启过）：清掉，只重新问口令
       if (tok) { setAuthToken(""); tok = ""; }
-      const again = await askKey(totpKnownOn()
-        ? "令牌过期了，重新输一次口令和动态码。"
-        : "令牌过期了，重新输一次口令。");
+      const again = await askKey("登录已过期，再输一次管理员口令就能发布。");
       if (!again) throw new Error("CANCELLED");
-      key = again.key; code = again.code;
+      key = again.key;
     }
 
     let j = {};
@@ -934,7 +926,7 @@
       return;
     }
     if (r.status === 401) {
-      if (stat) stat.textContent = "登录状态已过期，刷新页面重新进后台";
+      if (stat) stat.textContent = "登录状态已过期，点右上角「退出管理」重新进一次";
       box.innerHTML = "";
       return;
     }
