@@ -57,7 +57,43 @@
     throw last;
   }
 
+  /* ---------- 文案本机缓存（首屏不跳字） ----------
+     现象：导航左上角先显示 HTML 里写死的「我们的故事」，content.json 到了才换成「Album」。
+     慢网下 content.json 要等好几秒，这段时间用户看到的是一句不对的文案——不是字体、不是动画，
+     是数据没到。修法：上次拿到的 meta.texts 存 localStorage，下次开页先用它把文案填上，
+     content.json 到了再以线上为准覆盖。缓存只是加速，失效（首访/清缓存）时行为和以前一样。 */
+  const TEXT_CACHE = "album-texts-v1";
+  function cachedTexts() {
+    try {
+      const o = JSON.parse(localStorage.getItem(TEXT_CACHE) || "null");
+      return o && typeof o === "object" && o.texts && typeof o.texts === "object" ? o : null;
+    } catch (e) {
+      return null;
+    }
+  }
+  function saveTexts() {
+    try {
+      const t = Site.db && Site.db.meta && Site.db.meta.texts;
+      if (!t) return;
+      localStorage.setItem(TEXT_CACHE, JSON.stringify({ v: 1, at: Date.now(), texts: t }));
+    } catch (e) {} // 隐私模式/配额满：不缓存也能用，别让这行挡住后面
+  }
+
   Site.load = async function () {
+    // base.json 和 content.json 并行拿。以前是串行 await：content.json 的 316 KB 下完了
+    // 才开始请求 base.json，而 base.json 失败还要重试 2×8 秒——慢网下 applyTexts 被吊到 20 秒后。
+    const baseP = getJSON("base.json", "base.json", 2, true, 8000)
+      .then((bj) => {
+        Site.base = String((bj && bj.base) || "").replace(/\/+$/, "");
+        if (!Site.base) throw new Error("base.json 里没有 base 字段");
+        Site.mediaError = "";
+      })
+      .catch((e) => {
+        Site.mediaError = String((e && e.message) || e);
+        console.warn("[Site] NAS 地址读取失败：", Site.mediaError);
+        Site.base = "";
+      });
+
     try {
       Site.db = await getJSON("data/content.json", "content.json", 3, false, 45000);
       Site.ready = true;
@@ -66,16 +102,10 @@
       console.warn("[Site] 内容加载失败：", Site.error);
       return Site;
     }
-    // 取 NAS 地址（失败不阻塞文字内容，只是图片出不来）
-    try {
-      const bj = await getJSON("base.json", "base.json", 2, true, 8000);
-      Site.base = String((bj && bj.base) || "").replace(/\/+$/, "");
-      if (!Site.base) throw new Error("base.json 里没有 base 字段");
-    } catch (e) {
-      Site.mediaError = String((e && e.message) || e);
-      console.warn("[Site] NAS 地址读取失败：", Site.mediaError);
-      Site.base = "";
-    }
+    // 文案一到位就先刷一遍，别等 base.json（图片地址失败不该拖住文字）
+    Site.applyTexts();
+    saveTexts();
+    await baseP;
     Site.attachBase();
     return Site;
   };
@@ -919,6 +949,9 @@
   /* ---------- 结语：内容就绪事件 ---------- */
   Site.boot = async function () {
     Site.watchFonts();          // 和内容加载并行，不等
+    // 先用上次的文案把首屏填上（防「我们的故事 → Album」跳字），再去拿线上内容
+    const c = cachedTexts();
+    if (c) { Site.db = { meta: { texts: c.texts } }; Site.applyTexts(); }
     await Site.load();
     Site.applyTexts();
     Site.renderDays();
