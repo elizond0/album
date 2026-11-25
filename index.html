@@ -128,7 +128,7 @@
          data-stamp 会被 scripts/site.js 用 content.json 的 builtAt（内容发布时间）覆盖，
          那是「改了内容」的时间，不是「改了页面」的时间，放页面上会被误读成页面版本。
          规则 §B5.11 要求版本号+日期时间在构建期写死，所以这里不挂 data-stamp。 -->
-    <p class="footer__stamp">ver 2026.11.24 21:20</p>
+    <p class="footer__stamp">ver 2026.11.25 23:10</p>
   </footer>
 
   <script src="scripts/site.js"></script>
@@ -147,13 +147,28 @@
         db.photos[0];
       const im = document.getElementById("hero-img");
       if (im) {
+        const useHeroPlaceholder = function () {
+          if (im.dataset.heroFallback) return;
+          im.dataset.heroFallback = "1";
+          im.src = Site.PLACEHOLDER;
+          im.alt = "照片暂时不在";
+        };
         if (heroPhoto) {
+          im.dataset.heroFallback = "";
           im.src = Site.imgSrc(heroPhoto.src);
           im.alt = heroPhoto.title || "我们的合照";
           Site.guardImg(im);
+          /* 隧道慢/NAS 休眠时，主图可能长时间停在空白相框。
+             12 秒还没出图就切离线占位；照片墙与灯箱仍走原有兜底，不互相影响。 */
+          const heroTimer = setTimeout(function () {
+            if (!im.complete || !im.naturalWidth) useHeroPlaceholder();
+          }, 12000);
+          im.addEventListener("load", function () {
+            if (im.naturalWidth > 0) clearTimeout(heroTimer);
+          });
+          im.addEventListener("error", useHeroPlaceholder);
         } else {
-          im.src = Site.PLACEHOLDER;
-          im.alt = "照片暂时不在";
+          useHeroPlaceholder();
         }
       }
 
