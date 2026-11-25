@@ -21,6 +21,24 @@
   <link rel="stylesheet" href="styles/base.css" />
   <link rel="stylesheet" href="styles/components.css" />
   <script src="scripts/gate.js"></script>
+  <!-- 首屏文案预填（防「我们的故事 → Album」跳字）。
+       导航 logo 这类文案由 data/content.json 提供，要等网络回来才换得上；
+       慢网下先看到写死的「我们的故事」、几秒后跳成「Album」，像页面出了毛病。
+       这里在解析 HTML 的同一刻就把上次缓存下来的文案写进去（site.js 负责写缓存、
+       内容到了再以线上为准覆盖）。缓存键与 site.js 的 TEXT_CACHE 一致，别各改各的。
+       放在 <head> 行内是有意的：外链脚本要等下载，这里一行就生效，零请求。 -->
+  <script>
+    (function () {
+      try {
+        var c = JSON.parse(localStorage.getItem("album-texts-v1") || "null");
+        if (!c || !c.texts) return; // 首访没有缓存：照旧显示 HTML 里的文案
+        document.querySelectorAll("[data-text]").forEach(function (n) {
+          var v = c.texts[n.dataset.text];
+          if (v) n.textContent = v; // 空值不覆盖，免得把兜底文案擦掉
+        });
+      } catch (e) {}
+    })();
+  </script>
 </head>
 <body>
   <div class="atmosphere" aria-hidden="true"></div>
@@ -128,7 +146,7 @@
          data-stamp 会被 scripts/site.js 用 content.json 的 builtAt（内容发布时间）覆盖，
          那是「改了内容」的时间，不是「改了页面」的时间，放页面上会被误读成页面版本。
          规则 §B5.11 要求版本号+日期时间在构建期写死，所以这里不挂 data-stamp。 -->
-    <p class="footer__stamp">ver 2026.11.25 23:10</p>
+    <p class="footer__stamp">ver 2026.11.26 00:50</p>
   </footer>
 
   <script src="scripts/site.js"></script>
