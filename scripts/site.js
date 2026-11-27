@@ -82,6 +82,32 @@
     EMOJI_ICON[pair[0] + "\uFE0F"] = pair[1];
   });
 
+  /* 设备能不能真画出彩色 emoji：canvas 画一个已知 emoji，看有没有「非灰」像素。
+     只判断「有没有画上东西」不够——没有 emoji 字体时浏览器画的是空心方框，
+     那也有像素、也不透明，恰恰是要判成「不支持」的情形。
+     检测本身抛错就按「支持」处理：宁可维持原生行为，也别把正常设备全降级成图标。 */
+  const hasColorEmoji = (function () {
+    try {
+      const cv = document.createElement("canvas");
+      cv.width = cv.height = 16;
+      const cx = cv.getContext("2d", { willReadFrequently: true });
+      if (!cx) return true;
+      cx.textBaseline = "top";
+      cx.font = "16px sans-serif";
+      cx.fillText("🍕", 0, 0);
+      const px = cx.getImageData(0, 0, 16, 16).data;
+      for (let i = 0; i < px.length; i += 4) {
+        if (px[i + 3] < 8) continue;
+        const r = px[i], g = px[i + 1], b = px[i + 2];
+        if (Math.abs(r - g) > 16 || Math.abs(g - b) > 16) return true;
+      }
+      return false;
+    } catch (e) {
+      return true;
+    }
+  })();
+  Site.hasColorEmoji = hasColorEmoji;
+
   Site.icon = function (name, cls) {
     const d = ICONS[name];
     if (!d) return "";
@@ -92,18 +118,25 @@
     );
   };
 
-  /* 心愿卡图标：命中的走 SVG；没收录的保留原字符（有 emoji 字体的设备照样显示）；
-     字段为空时给一颗星，别留一个空洞。 */
+  /* 心愿卡图标：命中的走 SVG；字段为空给一颗星。
+     没收录的字符分两种设备：能画彩色 emoji 的原样输出（保住原生样子），
+     画不出来的（无 emoji 字体，画出来是豆腐块）同样给一颗星——
+     这样「新加一条愿望、忘了补图标」最差也只是星星，不会卡片前顶个方框。 */
   Site.wishIcon = function (ch) {
     const raw = String(ch ?? "").trim();
     if (!raw) return Site.icon("star", "wish__ico");
     const name = EMOJI_ICON[raw] || EMOJI_ICON[raw.replace(/\uFE0F/g, "")];
-    return name ? Site.icon(name, "wish__ico") : esc(raw);
+    if (name) return Site.icon(name, "wish__ico");
+    return hasColorEmoji ? esc(raw) : Site.icon("star", "wish__ico");
   };
 
   /* 引语是整句文字，emoji 夹在句中，只能在转义后按字符替换成行内 SVG。
-     转义不改变 emoji 码位，所以「先 esc 再替换」是安全的；未收录的字符原样留着。
-     按长度倒序替换，保证「🛍️（带 FE0F）」先于「🛍」命中，不会剩一个孤立 FE0F。 */
+     转义不改变 emoji 码位，所以「先 esc 再替换」是安全的。
+     按长度倒序替换，保证「🛍️（带 FE0F）」先于「🛍」命中，不会剩一个孤立 FE0F。
+     表里没有的 emoji：有彩色字体的设备原样留着；没有的会渲染成方框，
+     句中一个豆腐块比少一个表情更扎眼，直接去掉（句子本身仍读得通）。
+     只清理 U+1F000–1FAFF 这片彩色 emoji 区——♨ ★ 这类老符号在无 emoji 字体的
+     设备上仍由普通字体兜着，不能一起删。 */
   Site.richText = function (s) {
     let out = esc(s);
     Object.keys(EMOJI_ICON)
@@ -113,6 +146,7 @@
         const svg = Site.icon(EMOJI_ICON[ch], "quote__ico");
         if (svg) out = out.split(ch).join(svg);
       });
+    if (!hasColorEmoji) out = out.replace(/[\u{1F000}-\u{1FAFF}]\uFE0F?/gu, "");
     return out;
   };
 
