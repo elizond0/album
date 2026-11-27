@@ -14,6 +14,9 @@
  */
 (function () {
   var KEY = "album_gate_v1";
+  /* 「刚才是票失效才回到这里」的一次性提示标志。键名故意不带 - / _：
+     purge() 会把 sessionStorage 里的 album-* 清干净，带前缀的存不住。 */
+  var EXPIRED_FLAG = "albExpired";
 
   /* ---------- 退出：清掉本机所有验证痕迹 ----------
      只清本相册自己的键，同域下别的工具（值得买、PDF 工具站）不受牵连。
@@ -42,6 +45,23 @@
         if (/^album[-_]/i.test(k)) sessionStorage.removeItem(k);
       });
     } catch (e) {}
+  }
+
+  /* 复核票：服务端只回 204（认）/ 401（不认）。
+     401 才清票 —— 网络错误、5xx、隧道断都不是票的问题，清了反而要人白输
+     一遍；那种情况页面本来就会显示占位图，语义是对的。 */
+  function recheckTicket(tk) {
+    if (!BASE || !tk) return;
+    fetch(BASE + "/api/gate?k=" + encodeURIComponent(tk), { cache: "no-store" })
+      .then(function (r) {
+        if (r.status !== 401) return;
+        purge();
+        try { sessionStorage.setItem(EXPIRED_FLAG, "1"); } catch (e) {}
+        // 整页重载而不是就地挂门禁：此时内容脚本可能已经在拉图，
+        // 就地切换会留下一批半截请求和已渲染的占位图。
+        location.reload();
+      })
+      .catch(function () {});
   }
 
   function logout() {
@@ -76,6 +96,16 @@
     window.__ALBUM_K = String(store.t);
     window.__ALBUM_KIND = String(store.k || "guest");
     mountExit();
+    /* 本地没过期 ≠ 服务端还认这张票。NAS 重启丢票表、密钥轮换、服务端
+       主动撤销，都会让 store.e 还在未来而票已经作废。原先只看本地时间，
+       于是照样放行，每张图都 401，整页变成「NAS 睡着了」的占位图 —— 用户
+       看到的是一片空白，完全不知道是自己该重新输码（2026-11-27 实测就是
+       这个现象，查了半天才确认与前端改动无关）。
+       现在放行之后补一次复核：先让图片跑起来（不额外等一轮网络），
+       拿到 401 再清票重载，交回输码卡片。 */
+    loadBase(function () {
+      recheckTicket(String(store.t));
+    });
     return;
   }
   if (store) {
@@ -83,6 +113,12 @@
       localStorage.removeItem(KEY);
     } catch (e) {}
   }
+
+  var expired = false;
+  try {
+    expired = sessionStorage.getItem(EXPIRED_FLAG) === "1";
+    if (expired) sessionStorage.removeItem(EXPIRED_FLAG);
+  } catch (e) {}
 
   var docEl = document.documentElement;
   docEl.className += " gate-locked";
@@ -180,7 +216,9 @@
     box.innerHTML =
       '<form class="gate-card" autocomplete="off">' +
       "<h1>这是私人相册</h1>" +
-      "<p>输入验证器上的 6 位动态码，或管理员口令。</p>" +
+      "<p>" + (expired
+        ? "上次的验证已经失效（相册重启或票到期都会这样），重新输一次就好。"
+        : "输入验证器上的 6 位动态码，或管理员口令。") + "</p>" +
       '<input class="gate-input" type="text" name="code" inputmode="text" ' +
       'autocomplete="one-time-code" autocapitalize="off" autocorrect="off" spellcheck="false" ' +
       'placeholder="6 位数字 / 管理员口令" />' +
