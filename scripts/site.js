@@ -17,6 +17,105 @@
   const Site = { esc, db: null, ready: false, error: "", base: "", mediaError: "", thumbDead: false };
   window.Site = Site;
 
+  /* ---------- 图标层：内联 SVG 顶替 emoji ----------
+     起因（2026-11-27）：所有者设备的 emoji 自检 14 项缺 13 项——连 U+1F355 披萨、
+     U+1F3AE 手柄这种 2010 年的老 emoji 都画成方框，只有 U+2668（1993 年的符号）
+     正常。说明那台机器根本没有彩色 emoji 字体，换任何 emoji 字符都没用，只能换成
+     不依赖字体的矢量图。
+     约束：数据层不动——content.json 里照旧存 emoji 字符，后台「表情」框照旧编辑；
+     渲染时按字符查表换成 SVG，表里没有的字符原样输出（有字体的设备照样能看），
+     所以以后加新愿望不会因为忘了配图而白屏。 */
+  const ICONS = {
+    mountain:
+      '<path d="M2.5 19.5h19L13.8 5.5 10.6 11.2 8.2 7.6 2.5 19.5Z"/><path d="M9.4 12.9l1.2-1.7 1.2 1.4"/>',
+    "heart-hand":
+      '<path d="M12 14.8S6.8 11.5 6.8 8.1A2.9 2.9 0 0 1 12 6.4a2.9 2.9 0 0 1 5.2 1.7c0 3.4-5.2 6.7-5.2 6.7Z"/><path d="M5.9 19.6c.7-2.7 2.7-4.3 6.1-4.3s5.4 1.6 6.1 4.3"/>',
+    train:
+      '<rect x="3.2" y="10.8" width="9.6" height="5.8" rx="2.2"/><path d="M12.8 16.6V7.2h5.2a1.6 1.6 0 0 1 1.6 1.6v7.8"/><rect x="14.6" y="9.2" width="2.8" height="2.6" rx=".5"/><rect x="6" y="8" width="2.6" height="2.8" rx=".5"/><path d="M7.3 6.4c.9-.7.3-1.7 1.1-2.4"/><circle cx="6.4" cy="18.4" r="1.5"/><circle cx="11.6" cy="18.4" r="1.5"/><circle cx="16.4" cy="18.4" r="1.5"/><path d="M3.2 17.4h14.4"/>',
+    onsen:
+      '<path d="M8.2 9.8c0-1.6 1.1-2 1.1-3.6M12 9.8c0-1.8 1.1-2.2 1.1-4M15.8 9.8c0-1.6 1.1-2 1.1-3.6"/><path d="M4.8 12.6h14.4v3.2a4.2 4.2 0 0 1-4.2 4.2H9a4.2 4.2 0 0 1-4.2-4.2v-3.2Z"/>',
+    castle:
+      '<path d="M3.4 20V10l2-1.9 2 1.9v10"/><path d="M16.6 20V10l2-1.9 2 1.9v10"/><path d="M9 20V7.8L12 5l3 2.8V20"/><path d="M3.4 12h4.2M16.6 12h4.2M9 10.4h6"/><path d="M10.8 20v-3.6a1.2 1.2 0 0 1 2.4 0V20"/><path d="M2.6 20h18.8"/>',
+    masks:
+      '<path d="M14.8 4.6c2.2 0 3.9 1.6 3.9 3.8 0 3.1-1.6 5.7-3.9 5.7s-3.9-2.6-3.9-5.7c0-2.2 1.7-3.8 3.9-3.8Z"/><circle cx="13.4" cy="7.9" r=".65"/><circle cx="16.2" cy="7.9" r=".65"/><path d="M13.9 11.4c.6-.5 1.2-.5 1.8 0"/><path d="M8.2 8.4c2.2 0 3.9 1.6 3.9 3.8 0 3.1-1.6 5.7-3.9 5.7s-3.9-2.6-3.9-5.7c0-2.2 1.7-3.8 3.9-3.8Z"/><circle cx="6.8" cy="11.7" r=".65"/><circle cx="9.6" cy="11.7" r=".65"/><path d="M7.2 15.6c.7.8 1.6.8 2.3 0"/>',
+    bag:
+      '<path d="M5.6 8.6h12.8l-1 11.2H6.6L5.6 8.6Z"/><path d="M8.9 8.6V7.1a3.1 3.1 0 0 1 6.2 0v1.5"/>',
+    // 🛶 画成帆船：24×24 下独木舟那套「细长船身 + 一根桨」缩到 27px 就像碗里插勺子，
+    // 试过两版都不认。三角帆是「船」最稳的符号，对「RAFT 木筏求生」这条愿望同样成立。
+    boat:
+      '<path d="M12 3.4v11.2"/><path d="M12 3.4 20 13.2h-8Z"/><path d="M3.2 14.4h17.6c-.8 3.2-4 5.4-8.8 5.4s-8-2.2-8.8-5.4Z"/>',
+    gamepad:
+      '<path d="M8.4 8.4h7.2a5.4 5.4 0 0 1 5.3 6.7l-.5 2a2.5 2.5 0 0 1-4.4 1L14.4 16H9.6l-1.6 2.1a2.5 2.5 0 0 1-4.4-1l-.5-2a5.4 5.4 0 0 1 5.3-6.7Z"/><path d="M7.4 11.6v2.6M6.1 12.9h2.6"/><circle cx="16" cy="12.2" r=".8"/><circle cx="17.6" cy="14" r=".8"/>',
+    sunflower:
+      '<circle cx="12" cy="12" r="3.1"/><circle cx="12" cy="5.2" r="1.55" fill="currentColor" stroke="none"/><circle cx="12" cy="18.8" r="1.55" fill="currentColor" stroke="none"/><circle cx="5.2" cy="12" r="1.55" fill="currentColor" stroke="none"/><circle cx="18.8" cy="12" r="1.55" fill="currentColor" stroke="none"/><circle cx="7.2" cy="7.2" r="1.55" fill="currentColor" stroke="none"/><circle cx="16.8" cy="16.8" r="1.55" fill="currentColor" stroke="none"/><circle cx="16.8" cy="7.2" r="1.55" fill="currentColor" stroke="none"/><circle cx="7.2" cy="16.8" r="1.55" fill="currentColor" stroke="none"/>',
+    pizza:
+      '<path d="M12 3.6 20 19.5c-2.6 1.1-5.3 1.7-8 1.7s-5.4-.6-8-1.7L12 3.6Z"/><path d="M4 19.5c2.6 1.1 5.3 1.7 8 1.7s5.4-.6 8-1.7"/><circle cx="12" cy="9.6" r=".85"/><circle cx="9.9" cy="14.4" r=".85"/><circle cx="14.3" cy="15.4" r=".85"/>',
+    tree:
+      '<path d="M12 3.6a4.3 4.3 0 0 1 4.2 3.3 3.7 3.7 0 0 1 .5 7.2H7.3a3.7 3.7 0 0 1 .5-7.2A4.3 4.3 0 0 1 12 3.6Z"/><path d="M12 14.1v6.3"/><path d="M9.3 20.4h5.4"/>',
+    heartbeat:
+      '<path d="M12 19.2S5 14.6 5 9.9A3.7 3.7 0 0 1 12 7.6a3.7 3.7 0 0 1 7 2.3c0 4.7-7 9.3-7 9.3Z"/><path d="M8.6 11.7h1.4l.9-1.9 1.2 3.3.9-1.4h1.4"/>',
+    teddy:
+      '<circle cx="7.6" cy="7.6" r="2.5"/><circle cx="16.4" cy="7.6" r="2.5"/><circle cx="12" cy="13.6" r="6.1"/><circle cx="9.8" cy="12.4" r=".75"/><circle cx="14.2" cy="12.4" r=".75"/><ellipse cx="12" cy="15.1" rx="1.4" ry="1.05"/><path d="M12 16.2v.9M10.9 17.4c.7.5 1.5.5 2.2 0"/>',
+    star: '<path d="M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.2-4.1 5.8-.8L12 3.6Z"/>',
+  };
+
+  // emoji 字符 → 图标名。带 U+FE0F（变体选择符）与不带都注册一遍：
+  // content.json 里 ⛰️ / 🛍️ / ♨️ 是「字符 + FE0F」两码位，只注册裸字符会漏。
+  const EMOJI_ICON = {};
+  [
+    ["⛰", "mountain"],
+    ["🫰", "heart-hand"],
+    ["🚂", "train"],
+    ["♨", "onsen"],
+    ["🏰", "castle"],
+    ["🎭", "masks"],
+    ["🛍", "bag"],
+    ["🛶", "boat"],
+    ["🎮", "gamepad"],
+    ["🌻", "sunflower"],
+    ["🍕", "pizza"],
+    ["🌳", "tree"],
+    ["💓", "heartbeat"],
+    ["🧸", "teddy"],
+  ].forEach(function (pair) {
+    EMOJI_ICON[pair[0]] = pair[1];
+    EMOJI_ICON[pair[0] + "\uFE0F"] = pair[1];
+  });
+
+  Site.icon = function (name, cls) {
+    const d = ICONS[name];
+    if (!d) return "";
+    return (
+      '<svg class="' + (cls || "ico") + '" viewBox="0 0 24 24" fill="none" stroke="currentColor"' +
+      ' stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"' +
+      ' aria-hidden="true" focusable="false">' + d + "</svg>"
+    );
+  };
+
+  /* 心愿卡图标：命中的走 SVG；没收录的保留原字符（有 emoji 字体的设备照样显示）；
+     字段为空时给一颗星，别留一个空洞。 */
+  Site.wishIcon = function (ch) {
+    const raw = String(ch ?? "").trim();
+    if (!raw) return Site.icon("star", "wish__ico");
+    const name = EMOJI_ICON[raw] || EMOJI_ICON[raw.replace(/\uFE0F/g, "")];
+    return name ? Site.icon(name, "wish__ico") : esc(raw);
+  };
+
+  /* 引语是整句文字，emoji 夹在句中，只能在转义后按字符替换成行内 SVG。
+     转义不改变 emoji 码位，所以「先 esc 再替换」是安全的；未收录的字符原样留着。
+     按长度倒序替换，保证「🛍️（带 FE0F）」先于「🛍」命中，不会剩一个孤立 FE0F。 */
+  Site.richText = function (s) {
+    let out = esc(s);
+    Object.keys(EMOJI_ICON)
+      .sort(function (a, b) { return b.length - a.length; })
+      .forEach(function (ch) {
+        if (out.indexOf(ch) === -1) return;
+        const svg = Site.icon(EMOJI_ICON[ch], "quote__ico");
+        if (svg) out = out.split(ch).join(svg);
+      });
+    return out;
+  };
+
   /* ---------- 内容加载 ---------- */
   // content.json 里存的是相对路径（img/xxx.jpg）。真实的 NAS 地址在 base.json，
   // 由 NAS 开机时自动改写。这样隧道地址一换，只改 base.json 就行，
@@ -647,7 +746,7 @@
       card.className = "quote";
       card.style.setProperty("--tilt", ((i * 47) % 7) - 3 + "deg");
       card.innerHTML =
-        '<p class="quote__text">「' + esc(q.text) + "」</p>" +
+        '<p class="quote__text">「' + Site.richText(q.text) + "」</p>" +
         (q.tag ? '<cite class="quote__tag">—— ' + esc(q.tag) + "</cite>" : "");
       container.appendChild(card);
       Site.reveal(card, (i % 3) * 90);
@@ -688,7 +787,7 @@
         card.className = "wish reveal" + (w.done ? " wish--done" : "");
         card.innerHTML =
           '<span class="wish__check" aria-hidden="true">' + (w.done ? "✓" : "") + "</span>" +
-          '<span class="wish__emoji" aria-hidden="true">' + esc(w.emoji || "✨") + "</span>" +
+          '<span class="wish__emoji" aria-hidden="true">' + Site.wishIcon(w.emoji) + "</span>" +
           '<span class="wish__text' + (w.done ? " is-done" : "") + '">' + esc(w.text) + "</span>" +
           '<span class="wish__mark">' + (w.done ? "已解锁" : "待解锁") + "</span>";
         box.appendChild(card);
