@@ -672,6 +672,11 @@ main > .section.home-slide:first-of-type { border-top: 0; }
 }
 .quote:hover { transform: rotate(0deg) translateY(-3px); box-shadow: var(--shadow-2); }
 .quote__text { font-family: var(--font-display); font-size: var(--fs-h3); line-height: 1.7; }
+/* 引语里夹着的 emoji 同样换成行内 SVG：跟字号等比、略下沉与中文基线对齐 */
+.quote__ico {
+  width: 1.05em; height: 1.05em; display: inline-block;
+  vertical-align: -0.14em; margin: 0 0.08em;
+}
 .quote__tag { display: block; margin-top: var(--space-3); font-size: var(--fs-tiny); color: var(--color-muted); font-style: normal; }
 
 /* ---------- 愿望清单（TodoList 风格） ---------- */
@@ -724,7 +729,10 @@ main > .section.home-slide:first-of-type { border-top: 0; }
   font-size: 0.7rem; color: #fff; background: transparent;
 }
 .wish--done .wish__check { background: var(--color-accent); border-color: var(--color-accent); }
-.wish__emoji { font-size: 1.3rem; }
+/* 心愿图标：数据里仍是 emoji 字符，渲染时换成内联 SVG（设备无 emoji 字体也能画）。
+   svg 用 1.28em 而不是 100%：1.3rem 字号下约 27px，与原来 emoji 的视觉重量接近。 */
+.wish__emoji { font-size: 1.3rem; display: inline-flex; align-items: center; }
+.wish__emoji .wish__ico { width: 1.28em; height: 1.28em; display: block; }
 .wish__text { flex: 1; color: var(--color-text); }
 .wish__text.is-done { text-decoration: line-through; color: var(--color-muted); }
 .wish__mark { font-size: var(--fs-tiny); color: var(--color-muted); white-space: nowrap; }
